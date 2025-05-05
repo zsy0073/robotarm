@@ -83,6 +83,293 @@ int RobotArmController::initPS2Controller() {
     return error;
 }
 
+// 初始化PS2控制器接口，供FreeRTOS模块使用
+int RobotArmController::initializePS2(uint8_t clkPin, uint8_t cmdPin, uint8_t selPin, uint8_t datPin) {
+    // 配置手柄，使用传入的引脚参数，关闭震动和压感功能
+    int error = ps2x.config_gamepad(clkPin, cmdPin, selPin, datPin, false, false);
+    
+    // 输出初始化状态
+    switch (error) {
+        case 0:
+            Serial.println("PS2手柄初始化成功 (RobotArmController)");
+            break;
+        case 1:
+            Serial.println("错误：未找到手柄，请检查连线");
+            break;
+        case 2:
+            Serial.println("错误：手柄未进入Analog模式，请按Analog按钮");
+            break;
+        case 3:
+            Serial.println("错误：手柄拒绝进入Pressures模式");
+            break;
+        default:
+            Serial.println("未知错误");
+            break;
+    }
+    
+    return error;
+}
+
+// 处理PS2输入并生成舵机命令
+bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, uint8_t& servoCount, 
+                                                     LobotServo servos[], uint16_t& time) {
+    // 读取PS2手柄状态 - 使用false参数禁用震动
+    ps2x.read_gamepad(false, false);
+    
+    // 检测三角键是否按下，用于机械臂复位
+    bool trianglePressed = ps2x.ButtonPressed(PSB_TRIANGLE);
+    if (trianglePressed) {
+        // 如果三角键被按下，触发复位功能并立即执行
+        type = MOVE_TO_HOME;
+        time = SLOW_MOVE_TIME; // 使用较慢的移动速度进行复位
+        
+        // 立即复位到初始位置，更新当前状态
+        moveToInitialPosition();
+        
+        // 输出复位命令信息
+        Serial.println("舵机组命令：复位到初始位置");
+        return true;
+    }
+    
+    // 摇杆死区设置
+    const int STICK_DEADZONE = 15;  
+    
+    // 读取摇杆值
+    int lx = ps2x.Analog(PSS_LX) - 128;  // 范围-127到127
+    int ly = ps2x.Analog(PSS_LY) - 128;  // 范围-127到127
+    int rx = ps2x.Analog(PSS_RX) - 128;  // 范围-127到127
+    int ry = ps2x.Analog(PSS_RY) - 128;  // 范围-127到127
+    
+    // 死区检查
+    if (abs(lx) < STICK_DEADZONE) lx = 0;
+    if (abs(ly) < STICK_DEADZONE) ly = 0;
+    if (abs(rx) < STICK_DEADZONE) rx = 0;
+    if (abs(ry) < STICK_DEADZONE) ry = 0;
+    
+    // 使用恒定的舵机移动增量
+    const int FIXED_INCREMENT = 5; // 固定增量值
+    const int SERVO_PULSE_DELTA = DEGREE_TO_PULSE(2.4); // 与SERVO_PULSE_SPEED相同的增量
+    
+    int baseIncrement = (lx == 0) ? 0 : ((lx > 0) ? FIXED_INCREMENT : -FIXED_INCREMENT);
+    int shoulderIncrement = (ly == 0) ? 0 : ((ly > 0) ? -FIXED_INCREMENT : FIXED_INCREMENT); // 反转方向
+    int elbowIncrement = (ry == 0) ? 0 : ((ry > 0) ? -FIXED_INCREMENT : FIXED_INCREMENT);    // 反转方向
+    int wristIncrement = (rx == 0) ? 0 : ((rx > 0) ? FIXED_INCREMENT : -FIXED_INCREMENT);
+    
+    // 读取方向键和L2/R2状态
+    bool padUp = ps2x.Button(PSB_PAD_UP);
+    bool padDown = ps2x.Button(PSB_PAD_DOWN);
+    bool padLeft = ps2x.Button(PSB_PAD_LEFT);
+    bool padRight = ps2x.Button(PSB_PAD_RIGHT);
+    bool l1Pressed = ps2x.Button(PSB_L1);
+    bool l2Pressed = ps2x.Button(PSB_L2);
+    bool r1Pressed = ps2x.Button(PSB_R1);
+    bool r2Pressed = ps2x.Button(PSB_R2);
+    
+    // SELECT和START按钮的功能已被清空
+    
+    // 处理所有控制输入，包括摇杆、方向键和按钮
+    servoCount = 0;
+    bool hasMovement = false;
+    
+    // 1. 左摇杆控制1、2号舵机
+    if (lx != 0) {
+        uint16_t position = constrainServoAngle(BASE_SERVO_ID, 
+                                            currentPosition[BASE_SERVO_ID - 1] + 
+                                            baseIncrement * servoDirections[BASE_SERVO_ID - 1]);
+        servos[servoCount].ID = BASE_SERVO_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    if (ly != 0) {
+        uint16_t position = constrainServoAngle(SHOULDER_PITCH_ID, 
+                                            currentPosition[SHOULDER_PITCH_ID - 1] + 
+                                            shoulderIncrement * servoDirections[SHOULDER_PITCH_ID - 1]);
+        servos[servoCount].ID = SHOULDER_PITCH_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    // 2. 右摇杆控制3、4号舵机
+    if (rx != 0) {
+        uint16_t position = constrainServoAngle(SHOULDER_ROLL_ID, 
+                                            currentPosition[SHOULDER_ROLL_ID - 1] + 
+                                            wristIncrement * servoDirections[SHOULDER_ROLL_ID - 1]);
+        servos[servoCount].ID = SHOULDER_ROLL_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    if (ry != 0) {
+        uint16_t position = constrainServoAngle(ELBOW_SERVO_ID, 
+                                            currentPosition[ELBOW_SERVO_ID - 1] + 
+                                            elbowIncrement * servoDirections[ELBOW_SERVO_ID - 1]);
+        servos[servoCount].ID = ELBOW_SERVO_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    // 3. 方向键控制5、6号舵机
+    if (padUp) {
+        uint16_t position = constrainServoAngle(WRIST_PITCH_ID, 
+                                            currentPosition[WRIST_PITCH_ID - 1] - 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_PITCH_ID - 1]);
+        servos[servoCount].ID = WRIST_PITCH_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    else if (padDown) {
+        uint16_t position = constrainServoAngle(WRIST_PITCH_ID, 
+                                            currentPosition[WRIST_PITCH_ID - 1] + 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_PITCH_ID - 1]);
+        servos[servoCount].ID = WRIST_PITCH_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    if (padLeft) {
+        uint16_t position = constrainServoAngle(WRIST_ROLL_ID, 
+                                            currentPosition[WRIST_ROLL_ID - 1] - 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_ROLL_ID - 1]);
+        servos[servoCount].ID = WRIST_ROLL_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    else if (padRight) {
+        uint16_t position = constrainServoAngle(WRIST_ROLL_ID, 
+                                            currentPosition[WRIST_ROLL_ID - 1] + 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_ROLL_ID - 1]);
+        servos[servoCount].ID = WRIST_ROLL_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    // 4. L1/L2控制7号舵机
+    if (l1Pressed) {
+        uint16_t position = constrainServoAngle(WRIST_YAW_ID, 
+                                            currentPosition[WRIST_YAW_ID - 1] - 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_YAW_ID - 1]);
+        servos[servoCount].ID = WRIST_YAW_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    else if (l2Pressed) {
+        uint16_t position = constrainServoAngle(WRIST_YAW_ID, 
+                                            currentPosition[WRIST_YAW_ID - 1] + 
+                                            SERVO_PULSE_DELTA * servoDirections[WRIST_YAW_ID - 1]);
+        servos[servoCount].ID = WRIST_YAW_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    // 5. R1/R2控制8号舵机
+    if (r1Pressed) {
+        uint16_t position = constrainServoAngle(GRIPPER_SERVO_ID, 
+                                            currentPosition[GRIPPER_SERVO_ID - 1] + 
+                                            SERVO_PULSE_DELTA * servoDirections[GRIPPER_SERVO_ID - 1]);
+        servos[servoCount].ID = GRIPPER_SERVO_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    else if (r2Pressed) {
+        uint16_t position = constrainServoAngle(GRIPPER_SERVO_ID, 
+                                            currentPosition[GRIPPER_SERVO_ID - 1] - 
+                                            SERVO_PULSE_DELTA * servoDirections[GRIPPER_SERVO_ID - 1]);
+        servos[servoCount].ID = GRIPPER_SERVO_ID;
+        servos[servoCount].Position = position;
+        servoCount++;
+        hasMovement = true;
+    }
+    
+    if (hasMovement && servoCount > 0) {
+        time = 20; // 快速响应
+        type = MOVE_ALL_SERVOS;
+        
+        // 命令解析后输出舵机组命令信息
+        Serial.print("舵机组命令：[");
+        // 输出角度值数组
+        for (int i = 0; i < 8; i++) {
+            Serial.print(PULSE_TO_DEGREE(currentPosition[i]), 1); // 保留1位小数
+            if (i < 7) Serial.print("、");
+        }
+        Serial.print("][");
+        // 输出脉冲值数组
+        for (int i = 0; i < 8; i++) {
+            Serial.print(currentPosition[i]);
+            if (i < 7) Serial.print("、");
+        }
+        Serial.println("]");
+        
+        return true;
+    }
+    
+    return false; // 没有生成新的命令
+}
+
+// 获取当前舵机位置
+uint16_t RobotArmController::getServoPosition(uint8_t servoID) {
+    if (servoID >= 1 && servoID <= 8) {
+        return currentPosition[servoID - 1];
+    }
+    return 0;
+}
+
+// 设置舵机位置
+void RobotArmController::setServoPosition(uint8_t servoID, uint16_t position) {
+    if (servoID >= 1 && servoID <= 8) {
+        currentPosition[servoID - 1] = position;
+    }
+}
+
+// 移动到初始位置
+void RobotArmController::moveToInitialPosition() {
+    // 创建舵机数组
+    LobotServo servos[8];
+    
+    // 设置各舵机初始位置
+    servos[0].ID = BASE_SERVO_ID;
+    servos[0].Position = HOME_BASE;
+    
+    servos[1].ID = SHOULDER_PITCH_ID;
+    servos[1].Position = HOME_SHOULDER;
+    
+    servos[2].ID = SHOULDER_ROLL_ID;
+    servos[2].Position = HOME_SHOULDER;
+    
+    servos[3].ID = ELBOW_SERVO_ID;
+    servos[3].Position = HOME_ELBOW;
+    
+    servos[4].ID = WRIST_PITCH_ID;
+    servos[4].Position = HOME_WRIST_PITCH;
+    
+    servos[5].ID = WRIST_ROLL_ID;
+    servos[5].Position = HOME_WRIST_ROLL;
+    
+    servos[6].ID = WRIST_YAW_ID;
+    servos[6].Position = HOME_WRIST_YAW;
+    
+    servos[7].ID = GRIPPER_SERVO_ID;
+    servos[7].Position = HOME_GRIPPER;
+    
+    // 外部实际控制由FreeRTOS队列处理
+    // 仅更新内部状态
+    for (int i = 0; i < 8; i++) {
+        currentPosition[i] = servos[i].Position;
+        servoSpeedControl[i] = 0; // 停止所有舵机
+    }
+}
+
 // 初始化机械臂位置
 void RobotArmController::initRobotArm() {
     // 创建舵机数组
@@ -122,16 +409,20 @@ void RobotArmController::initRobotArm() {
         servoSpeedControl[i] = 0; // 停止所有舵机
     }
     
-    Serial.println("机械臂已初始化到初始位置");
-    // 打印当前位置的角度值，便于调试
-    Serial.println("当前舵机角度(度):");
+    // 使用新的前缀输出舵机位置
+    Serial.print("舵机组命令：[");
+    // 输出角度值数组
     for (int i = 0; i < 8; i++) {
-        Serial.print("舵机 ");
-        Serial.print(i + 1);
-        Serial.print(": ");
-        Serial.print(PULSE_TO_DEGREE(currentPosition[i]));
-        Serial.println("度");
+        Serial.print(PULSE_TO_DEGREE(currentPosition[i]), 1); // 保留1位小数
+        if (i < 7) Serial.print("、");
     }
+    Serial.print("][");
+    // 输出脉冲值数组
+    for (int i = 0; i < 8; i++) {
+        Serial.print(currentPosition[i]);
+        if (i < 7) Serial.print("、");
+    }
+    Serial.println("]");
 }
 
 // 限制舵机角度在安全范围内
@@ -184,6 +475,21 @@ uint16_t RobotArmController::constrainServoAngle(uint8_t servoID, uint16_t pulse
     }
 }
 
+// 所有舵机掉电
+void RobotArmController::unloadAllServos() {
+    // 使用正确的方法掉电所有舵机 - 一次掉电一个舵机
+    controller.setServoUnload(1, BASE_SERVO_ID);
+    controller.setServoUnload(1, SHOULDER_PITCH_ID);
+    controller.setServoUnload(1, SHOULDER_ROLL_ID);
+    controller.setServoUnload(1, ELBOW_SERVO_ID);
+    controller.setServoUnload(1, WRIST_PITCH_ID);
+    controller.setServoUnload(1, WRIST_ROLL_ID);
+    controller.setServoUnload(1, WRIST_YAW_ID);
+    controller.setServoUnload(1, GRIPPER_SERVO_ID);
+    
+    Serial.println("已执行所有舵机掉电操作");
+}
+
 // 根据摇杆值计算舵机转动方向
 int RobotArmController::calculateServoSpeed(int stickValue, int servoIndex) {
     const int deadZone = 20;
@@ -196,16 +502,17 @@ int RobotArmController::calculateServoSpeed(int stickValue, int servoIndex) {
         return 0;
     }
     
-    // 根据舵机方向设置和摇杆值计算实际转动速度
+    // 确定方向但使用恒定速度
     int direction = (stickValue > 0) ? 1 : -1;
-    // 应用舵机正反转设置
+    
+    // 应用舵机方向设置并返回恒定速度
     return direction * servoDirections[servoIndex] * SERVO_PULSE_SPEED;
 }
 
 // 根据手柄输入更新舵机方向
 void RobotArmController::updateServoDirections() {
-    // 读取PS2手柄状态
-    ps2x.read_gamepad();
+    // 读取PS2手柄状态 - 禁用震动功能
+    ps2x.read_gamepad(false, false);
     
     // 读取摇杆和按钮状态
     int leftStickX = ps2x.Analog(PSS_LX);
@@ -219,143 +526,65 @@ void RobotArmController::updateServoDirections() {
     bool padLeft = ps2x.Button(PSB_PAD_LEFT);
     bool padRight = ps2x.Button(PSB_PAD_RIGHT);
     
-    // 读取肩部按键状态
+    // 读取按钮状态
     bool l1Pressed = ps2x.Button(PSB_L1);
     bool r1Pressed = ps2x.Button(PSB_R1);
     bool l2Pressed = ps2x.Button(PSB_L2);
     bool r2Pressed = ps2x.Button(PSB_R2);
     
-    // 根据摇杆值计算舵机转动速度
-    servoSpeedControl[0] = calculateServoSpeed(leftStickX, 0);   // 左摇杆X轴控制底座旋转
-    servoSpeedControl[1] = calculateServoSpeed(leftStickY, 1);   // 左摇杆Y轴控制肩部俯仰
-    servoSpeedControl[3] = calculateServoSpeed(rightStickY, 3);  // 右摇杆Y轴控制肘部
-    servoSpeedControl[5] = calculateServoSpeed(rightStickX, 5);  // 右摇杆X轴控制腕部滚转
-
-    // 根据肩部按键计算肩部滚转速度
-    if (l1Pressed) servoSpeedControl[2] = -SERVO_PULSE_SPEED * servoDirections[2];
-    else if (r1Pressed) servoSpeedControl[2] = SERVO_PULSE_SPEED * servoDirections[2];
-    else servoSpeedControl[2] = 0;
+    // 新的控制方案
+    // 1. 左摇杆控制1、2号舵机
+    servoSpeedControl[0] = calculateServoSpeed(leftStickX, 0);   // 左摇杆X轴控制1号舵机（底座旋转）
+    servoSpeedControl[1] = calculateServoSpeed(leftStickY, 1);   // 左摇杆Y轴控制2号舵机（肩部俯仰）
     
-    // 根据方向键计算腕部俯仰和偏航速度
-    if (padUp) servoSpeedControl[4] = -SERVO_PULSE_SPEED * servoDirections[4];
-    else if (padDown) servoSpeedControl[4] = SERVO_PULSE_SPEED * servoDirections[4];
-    else servoSpeedControl[4] = 0;
+    // 2. 右摇杆控制3、4号舵机
+    servoSpeedControl[2] = calculateServoSpeed(rightStickX, 2);  // 右摇杆X轴控制3号舵机（肩部滚转）
+    servoSpeedControl[3] = calculateServoSpeed(rightStickY, 3);  // 右摇杆Y轴控制4号舵机（肘部）
     
-    if (padLeft) servoSpeedControl[6] = -SERVO_PULSE_SPEED * servoDirections[6];
-    else if (padRight) servoSpeedControl[6] = SERVO_PULSE_SPEED * servoDirections[6];
-    else servoSpeedControl[6] = 0;
-    
-    // 根据L2/R2计算夹爪开合速度
-    if (l2Pressed) servoSpeedControl[7] = -SERVO_PULSE_SPEED * servoDirections[7];
-    else if (r2Pressed) servoSpeedControl[7] = SERVO_PULSE_SPEED * servoDirections[7];
-    else servoSpeedControl[7] = 0;
-    
-    // 按下三角形按钮，机械臂回到初始位置
-    if (ps2x.ButtonPressed(PSB_TRIANGLE)) {
-        Serial.println("回到初始位置");
-        initRobotArm();
+    // 3. 方向键控制5、6号舵机
+    if (padUp) {
+        servoSpeedControl[4] = -SERVO_PULSE_SPEED * servoDirections[4];     // 上方向键控制5号舵机（腕部俯仰）向上
+    } 
+    else if (padDown) {
+        servoSpeedControl[4] = SERVO_PULSE_SPEED * servoDirections[4]; // 下方向键控制5号舵机（腕部俯仰）向下
+    }
+    else {
+        servoSpeedControl[4] = 0;
     }
     
-    // 按下方形按钮，夹爪完全打开
-    if (ps2x.ButtonPressed(PSB_SQUARE)) {
-        Serial.println("夹爪完全打开");
-        LobotServo servos[1];
-        servos[0].ID = GRIPPER_SERVO_ID;
-        servos[0].Position = useCustomLimits ? CUSTOM_GRIPPER_MAX : GRIPPER_MAX;
-        controller.moveServos(servos, 1, DEFAULT_MOVE_TIME);
-        currentPosition[7] = servos[0].Position;
-        
-        Serial.print("夹爪角度: ");
-        Serial.print(PULSE_TO_DEGREE(currentPosition[7]));
-        Serial.println("度");
+    if (padLeft) {
+        servoSpeedControl[5] = -SERVO_PULSE_SPEED * servoDirections[5];    // 左方向键控制6号舵机（腕部滚转）向左
+    }
+    else if (padRight) {
+        servoSpeedControl[5] = SERVO_PULSE_SPEED * servoDirections[5]; // 右方向键控制6号舵机（腕部滚转）向右
+    }
+    else {
+        servoSpeedControl[5] = 0;
     }
     
-    // 按下圆形按钮，夹爪完全闭合
-    if (ps2x.ButtonPressed(PSB_CIRCLE)) {
-        Serial.println("夹爪完全闭合");
-        LobotServo servos[1];
-        servos[0].ID = GRIPPER_SERVO_ID;
-        servos[0].Position = useCustomLimits ? CUSTOM_GRIPPER_MIN : GRIPPER_MIN;
-        controller.moveServos(servos, 1, DEFAULT_MOVE_TIME);
-        currentPosition[7] = servos[0].Position;
-        
-        Serial.print("夹爪角度: ");
-        Serial.print(PULSE_TO_DEGREE(currentPosition[7]));
-        Serial.println("度");
+    // 4. L1/L2控制7号舵机（腕部偏航）
+    if (l1Pressed) {
+        servoSpeedControl[6] = -SERVO_PULSE_SPEED * servoDirections[6];
+    }
+    else if (l2Pressed) {
+        servoSpeedControl[6] = SERVO_PULSE_SPEED * servoDirections[6];
+    }
+    else {
+        servoSpeedControl[6] = 0;
     }
     
-    // 按下SELECT+L3组合键切换限位设置
-    if (ps2x.Button(PSB_SELECT) && ps2x.ButtonPressed(PSB_L3)) {
-        useCustomLimits = !useCustomLimits;
-        Serial.print("切换限位设置: ");
-        if (useCustomLimits) {
-            Serial.println("使用自定义限位");
-            Serial.println("自定义限位范围(度):");
-            Serial.print("底座: ");
-            Serial.print(CUSTOM_BASE_MIN_DEG);
-            Serial.print("-");
-            Serial.println(CUSTOM_BASE_MAX_DEG);
-            
-            Serial.print("肩部: ");
-            Serial.print(CUSTOM_SHOULDER_MIN_DEG);
-            Serial.print("-");
-            Serial.println(CUSTOM_SHOULDER_MAX_DEG);
-            
-            Serial.print("肘部: ");
-            Serial.print(CUSTOM_ELBOW_MIN_DEG);
-            Serial.print("-");
-            Serial.println(CUSTOM_ELBOW_MAX_DEG);
-            
-            Serial.print("夹爪: ");
-            Serial.print(CUSTOM_GRIPPER_MIN_DEG);
-            Serial.print("-");
-            Serial.println(CUSTOM_GRIPPER_MAX_DEG);
-        } else {
-            Serial.println("使用默认限位");
-            Serial.println("默认限位范围(度):");
-            Serial.print("底座: ");
-            Serial.print(BASE_MIN_DEG);
-            Serial.print("-");
-            Serial.println(BASE_MAX_DEG);
-            
-            Serial.print("肩部: ");
-            Serial.print(SHOULDER_MIN_DEG);
-            Serial.print("-");
-            Serial.println(SHOULDER_MAX_DEG);
-            
-            Serial.print("肘部: ");
-            Serial.print(ELBOW_MIN_DEG);
-            Serial.print("-");
-            Serial.println(ELBOW_MAX_DEG);
-            
-            Serial.print("夹爪: ");
-            Serial.print(GRIPPER_MIN_DEG);
-            Serial.print("-");
-            Serial.println(GRIPPER_MAX_DEG);
-        }
+    // 5. R1/R2控制8号舵机（夹爪）
+    if (r1Pressed) {
+        servoSpeedControl[7] = SERVO_PULSE_SPEED * servoDirections[7];    // R1开夹爪
+    }
+    else if (r2Pressed) {
+        servoSpeedControl[7] = -SERVO_PULSE_SPEED * servoDirections[7]; // R2闭夹爪
+    }
+    else {
+        servoSpeedControl[7] = 0;
     }
     
-    // 按下START按钮，查询当前电池电压和打印当前舵机角度
-    if (ps2x.ButtonPressed(PSB_START)) {
-        controller.getBatteryVoltage();
-        Serial.print("电池电压: ");
-        Serial.print(controller.batteryVoltage / 100.0);
-        Serial.println("V");
-        
-        // 打印当前限位模式
-        Serial.print("当前限位模式: ");
-        Serial.println(useCustomLimits ? "自定义限位" : "默认限位");
-        
-        // 打印所有舵机的当前角度 (度)
-        Serial.println("当前舵机角度(度):");
-        for (int i = 0; i < 8; i++) {
-            Serial.print("舵机 ");
-            Serial.print(i + 1);
-            Serial.print(": ");
-            Serial.print(PULSE_TO_DEGREE(currentPosition[i]));
-            Serial.println("度");
-        }
-    }
+    // SELECT和START按钮的功能已被清空
 }
 
 // 根据速度更新舵机位置
@@ -396,20 +625,6 @@ void RobotArmController::moveServos() {
                 needToMove = true;
             }
         }
-        
-        // 输出所有八个舵机的当前状态
-        Serial.print("舵机状态:");
-        for (int i = 0; i < 8; i++) {
-            if (i > 0) Serial.print(",");
-            Serial.print("#");
-            Serial.print(i + 1);  // 舵机ID
-            Serial.print(":");
-            Serial.print(currentPosition[i]);  // 舵机当前位置(脉冲值)
-            Serial.print("(");
-            Serial.print(PULSE_TO_DEGREE(currentPosition[i]), 1);  // 舵机当前角度，保留1位小数
-            Serial.print("°)");
-        }
-        Serial.println();
         
         // 如果有舵机需要移动，发送命令
         if (needToMove && servoCount > 0) {

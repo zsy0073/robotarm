@@ -5,6 +5,7 @@
 *****************************************************/
 
 #include "RobotArmFreeRTOS.h"
+#include "RobotArmController.h"
 
 // 函数前向声明
 void processPS2Input();
@@ -21,34 +22,8 @@ QueueHandle_t servoCommandQueue = NULL;
 // 舵机控制器实例
 LobotServoController servoController;
 
-// PS2控制器实例
-PS2X ps2x;
-
-// 当前舵机位置
-uint16_t currentServoPositions[SERVO_COUNT] = {
-    HOME_BASE,         // 底座舵机初始位置
-    HOME_SHOULDER,     // 肩部俯仰舵机初始位置
-    HOME_ELBOW,        // 肘部舵机初始位置
-    HOME_WRIST_PITCH,  // 腕部俯仰舵机初始位置
-    HOME_WRIST_ROLL,   // 腕部滚转舵机初始位置
-    HOME_WRIST_YAW,    // 腕部偏航舵机初始位置
-    HOME_GRIPPER       // 夹爪舵机初始位置
-};
-
-// 舵机方向配置
-const int servoDirections[SERVO_COUNT] = {
-    BASE_SERVO_DIR,        // 底座方向
-    SHOULDER_PITCH_DIR,    // 肩部俯仰方向
-    SHOULDER_ROLL_DIR,     // 肩部滚转方向
-    ELBOW_SERVO_DIR,       // 肘部方向
-    WRIST_PITCH_DIR,       // 腕部俯仰方向
-    WRIST_ROLL_DIR,        // 腕部滚转方向
-    WRIST_YAW_DIR,         // 腕部偏航方向
-    GRIPPER_SERVO_DIR      // 夹爪方向
-};
-
-// 是否使用自定义限位
-bool useCustomLimits = USE_CUSTOM_LIMITS;
+// 机械臂控制器实例 - 负责主要控制逻辑
+RobotArmController armController;
 
 // 初始化FreeRTOS任务和资源
 bool initRobotArmTasks() {
@@ -57,24 +32,66 @@ bool initRobotArmTasks() {
     // 创建命令队列 - 队列长度为10，每个项目大小为ServoCommand_t的大小
     servoCommandQueue = xQueueCreate(10, sizeof(ServoCommand_t));
     if (servoCommandQueue == NULL) {
-        Serial.println("创建命令队列失败");
         return false;
-    }
-    
-    // 初始化PS2控制器
-    int error = ps2x.config_gamepad(PS2_CLK_PIN, PS2_CMD_PIN, PS2_SEL_PIN, PS2_DAT_PIN, true, true);
-    if (error != 0) {
-        Serial.print("PS2手柄初始化失败，错误代码：");
-        Serial.println(error);
-        initSuccess = false;
-    } else {
-        Serial.println("PS2手柄初始化成功");
     }
     
     // 初始化舵机控制器
     servoController = LobotServoController(Serial2);
-    Serial2.begin(115200);
-    delay(500); // 等待舵机控制器初始化
+    // 使用指定的引脚配置Serial2
+    Serial2.begin(9600, SERIAL_8N1, SERVO_SERIAL_RX, SERVO_SERIAL_TX);
+    delay(500); // 等待舵机控制器初始化完成
+    
+    // 优先直接移动舵机到初始位置，确保立即执行
+    LobotServo servos[8];
+    
+    // 设置各舵机初始位置
+    servos[0].ID = BASE_SERVO_ID;
+    servos[0].Position = HOME_BASE;
+    
+    servos[1].ID = SHOULDER_PITCH_ID;
+    servos[1].Position = HOME_SHOULDER;
+    
+    servos[2].ID = SHOULDER_ROLL_ID;
+    servos[2].Position = HOME_SHOULDER;
+    
+    servos[3].ID = ELBOW_SERVO_ID;
+    servos[3].Position = HOME_ELBOW;
+    
+    servos[4].ID = WRIST_PITCH_ID;
+    servos[4].Position = HOME_WRIST_PITCH;
+    
+    servos[5].ID = WRIST_ROLL_ID;
+    servos[5].Position = HOME_WRIST_ROLL;
+    
+    servos[6].ID = WRIST_YAW_ID;
+    servos[6].Position = HOME_WRIST_YAW;
+    
+    servos[7].ID = GRIPPER_SERVO_ID;
+    servos[7].Position = HOME_GRIPPER;
+    
+    // 同时移动所有舵机到初始位置
+    servoController.moveServos(servos, 8, SLOW_MOVE_TIME);
+    
+    // 输出初始化舵机位置信息
+    Serial.print("舵机组命令：[");
+    // 输出角度值数组
+    for (int i = 0; i < 8; i++) {
+        Serial.print(PULSE_TO_DEGREE(servos[i].Position), 1); // 保留1位小数
+        if (i < 7) Serial.print("、");
+    }
+    Serial.print("][");
+    // 输出脉冲值数组
+    for (int i = 0; i < 8; i++) {
+        Serial.print(servos[i].Position);
+        if (i < 7) Serial.print("、");
+    }
+    Serial.println("]");
+    
+    // 使用RobotArmController初始化PS2控制器，不输出调试信息
+    int error = armController.initializePS2(PS2_CLK_PIN, PS2_CMD_PIN, PS2_SEL_PIN, PS2_DAT_PIN);
+    if (error != 0 && error != 2 && error != 3) {
+        initSuccess = false;
+    }
     
     // 创建舵机控制任务
     xTaskCreatePinnedToCore(
@@ -120,11 +137,6 @@ bool initRobotArmTasks() {
         0                               // 在Core 0上运行
     );
     
-    // 如果初始化成功，发送移动到初始位置的命令
-    if (initSuccess) {
-        moveToHomePosition();
-    }
-    
     return initSuccess;
 }
 
@@ -132,76 +144,30 @@ bool initRobotArmTasks() {
 void servoControlTask(void *pvParameters) {
     ServoCommand_t command;
     
-    Serial.println("舵机控制任务已启动");
-    
     for (;;) {
         // 等待队列中的命令
         if (xQueueReceive(servoCommandQueue, &command, portMAX_DELAY) == pdTRUE) {
-            // 根据命令类型执行操作
+            // 处理收到的命令
             switch (command.type) {
-                case MOVE_SINGLE_SERVO:
+                case MOVE_SINGLE_SERVO:                  
                     servoController.moveServo(command.servoID, command.position, command.time);
-                    // 更新当前位置
-                    if (command.servoID >= 1 && command.servoID <= SERVO_COUNT) {
-                        currentServoPositions[command.servoID - 1] = command.position;
-                    }
+                    // 更新RobotArmController中的位置
+                    armController.setServoPosition(command.servoID, command.position);
                     break;
                     
                 case MOVE_ALL_SERVOS:
                     servoController.moveServos(command.servos, command.servoCount, command.time);
-                    // 更新所有当前位置
+                    // 更新RobotArmController中的位置
                     for (int i = 0; i < command.servoCount; i++) {
                         if (command.servos[i].ID >= 1 && command.servos[i].ID <= SERVO_COUNT) {
-                            currentServoPositions[command.servos[i].ID - 1] = command.servos[i].Position;
+                            armController.setServoPosition(command.servos[i].ID, command.servos[i].Position);
                         }
                     }
                     break;
                     
                 case MOVE_TO_HOME:
-                    // 移动到初始位置
-                    {
-                        LobotServo servos[SERVO_COUNT];
-                        for (int i = 0; i < SERVO_COUNT; i++) {
-                            servos[i].ID = i + 1;
-                            
-                            // 根据舵机ID设置初始位置
-                            switch (i + 1) {
-                                case BASE_SERVO_ID:
-                                    servos[i].Position = HOME_BASE;
-                                    currentServoPositions[i] = HOME_BASE;
-                                    break;
-                                case SHOULDER_PITCH_ID:
-                                    servos[i].Position = HOME_SHOULDER;
-                                    currentServoPositions[i] = HOME_SHOULDER;
-                                    break;
-                                case SHOULDER_ROLL_ID:
-                                    servos[i].Position = HOME_SHOULDER;
-                                    currentServoPositions[i] = HOME_SHOULDER;
-                                    break;
-                                case ELBOW_SERVO_ID:
-                                    servos[i].Position = HOME_ELBOW;
-                                    currentServoPositions[i] = HOME_ELBOW;
-                                    break;
-                                case WRIST_PITCH_ID:
-                                    servos[i].Position = HOME_WRIST_PITCH;
-                                    currentServoPositions[i] = HOME_WRIST_PITCH;
-                                    break;
-                                case WRIST_ROLL_ID:
-                                    servos[i].Position = HOME_WRIST_ROLL;
-                                    currentServoPositions[i] = HOME_WRIST_ROLL;
-                                    break;
-                                case WRIST_YAW_ID:
-                                    servos[i].Position = HOME_WRIST_YAW;
-                                    currentServoPositions[i] = HOME_WRIST_YAW;
-                                    break;
-                                case GRIPPER_SERVO_ID:
-                                    servos[i].Position = HOME_GRIPPER;
-                                    currentServoPositions[i] = HOME_GRIPPER;
-                                    break;
-                            }
-                        }
-                        servoController.moveServos(servos, SERVO_COUNT, command.time);
-                    }
+                    // 委托RobotArmController移动到初始位置
+                    armController.moveToInitialPosition();
                     break;
                     
                 case UNLOAD_SERVOS:
@@ -226,7 +192,7 @@ void servoControlTask(void *pvParameters) {
 
 // 输入处理任务 - 处理PS2控制器输入
 void inputProcessingTask(void *pvParameters) {
-    Serial.println("输入处理任务已启动");
+    // 移除任务启动提示
     
     // 记录上次更新时间
     unsigned long lastUpdateTime = 0;
@@ -238,8 +204,6 @@ void inputProcessingTask(void *pvParameters) {
         if (currentTime - lastUpdateTime >= 20) {
             lastUpdateTime = currentTime;
             
-            ps2x.read_gamepad();
-            
             // 处理PS2输入
             processPS2Input();
         }
@@ -249,92 +213,97 @@ void inputProcessingTask(void *pvParameters) {
     }
 }
 
-// 处理PS2控制器输入
+// 处理PS2控制器输入 - 使用RobotArmController处理逻辑
 void processPS2Input() {
-    // 摇杆死区设置
-    const int STICK_DEADZONE = 30;  
+    // 使用RobotArmController处理PS2输入并生成舵机命令
+    ServoCommandType type;
+    uint8_t servoCount = 0;
+    LobotServo servos[SERVO_COUNT];
+    uint16_t time = 0;
     
-    // 第一个模拟摇杆 - 控制底座旋转和肩部俯仰
-    int lx = ps2x.Analog(PSS_LX) - 128;  // 范围-127到127
-    int ly = ps2x.Analog(PSS_LY) - 128;  // 范围-127到127
+    // 让RobotArmController处理输入并生成命令
+    bool hasCommand = armController.processPS2AndGenerateCommands(type, servoCount, servos, time);
     
-    // 第二个模拟摇杆 - 控制肘部和腕部俯仰
-    int rx = ps2x.Analog(PSS_RX) - 128;  // 范围-127到127
-    int ry = ps2x.Analog(PSS_RY) - 128;  // 范围-127到127
-    
-    // 死区检查
-    if (abs(lx) < STICK_DEADZONE) lx = 0;
-    if (abs(ly) < STICK_DEADZONE) ly = 0;
-    if (abs(rx) < STICK_DEADZONE) rx = 0;
-    if (abs(ry) < STICK_DEADZONE) ry = 0;
-    
-    // 计算舵机移动增量
-    int baseIncrement = map(lx, -127, 127, -5, 5);
-    int shoulderIncrement = map(ly, -127, 127, -5, 5) * (-1);  // 反转方向
-    int elbowIncrement = map(ry, -127, 127, -5, 5) * (-1);     // 反转方向
-    int wristIncrement = map(rx, -127, 127, -5, 5);
-    
-    // 按钮控制 - 夹爪控制
-    if (ps2x.ButtonPressed(PSB_R1)) {
-        // 打开夹爪
-        uint16_t position = constrainServoPosition(GRIPPER_SERVO_ID, 
-                                                 currentServoPositions[GRIPPER_SERVO_ID - 1] + 50);
-        sendServoCommand(MOVE_SINGLE_SERVO, GRIPPER_SERVO_ID, position, 500);
+    // 有命令生成则发送到命令队列
+    if (hasCommand) {
+        ServoCommand_t command;
+        command.type = type;
+        command.time = time;
+        
+        // 根据命令类型设置不同的参数
+        switch(type) {
+            case MOVE_ALL_SERVOS:
+                command.servoCount = servoCount;
+                for (int i = 0; i < servoCount; i++) {
+                    command.servos[i] = servos[i];
+                }
+                break;
+                
+            case MOVE_SINGLE_SERVO:
+                command.servoID = servos[0].ID;
+                command.position = servos[0].Position;
+                break;
+                
+            case MOVE_TO_HOME:
+                // 复位功能特殊处理：创建一个包含所有舵机的命令
+                command.servoCount = 8;  // 所有8个舵机
+                command.time = SLOW_MOVE_TIME;  // 使用较慢的移动速度
+                
+                // 设置各舵机初始位置
+                command.servos[0].ID = BASE_SERVO_ID;
+                command.servos[0].Position = HOME_BASE;
+                
+                command.servos[1].ID = SHOULDER_PITCH_ID;
+                command.servos[1].Position = HOME_SHOULDER;
+                
+                command.servos[2].ID = SHOULDER_ROLL_ID;
+                command.servos[2].Position = HOME_SHOULDER;
+                
+                command.servos[3].ID = ELBOW_SERVO_ID;
+                command.servos[3].Position = HOME_ELBOW;
+                
+                command.servos[4].ID = WRIST_PITCH_ID;
+                command.servos[4].Position = HOME_WRIST_PITCH;
+                
+                command.servos[5].ID = WRIST_ROLL_ID;
+                command.servos[5].Position = HOME_WRIST_ROLL;
+                
+                command.servos[6].ID = WRIST_YAW_ID;
+                command.servos[6].Position = HOME_WRIST_YAW;
+                
+                command.servos[7].ID = GRIPPER_SERVO_ID;
+                command.servos[7].Position = HOME_GRIPPER;
+                
+                // 更改命令类型为直接移动所有舵机
+                command.type = MOVE_ALL_SERVOS;
+                
+                Serial.println("发送复位指令: 所有舵机直接移动到初始位置");
+                break;
+                
+            // UNLOAD_SERVOS不需要额外参数
+            default:
+                break;
+        }
+        
+        // 发送命令到队列，对复位命令使用最高优先级
+        if (type == MOVE_TO_HOME) {
+            // 先清空队列中的所有命令
+            ServoCommand_t dummyCommand;
+            while (xQueueReceive(servoCommandQueue, &dummyCommand, 0) == pdTRUE) {
+                // 清空队列
+            }
+            // 然后发送复位命令
+            xQueueSendToFront(servoCommandQueue, &command, portMAX_DELAY);
+        } else {
+            // 正常发送其他命令
+            xQueueSend(servoCommandQueue, &command, portMAX_DELAY);
+        }
     }
-    
-    if (ps2x.ButtonPressed(PSB_L1)) {
-        // 关闭夹爪
-        uint16_t position = constrainServoPosition(GRIPPER_SERVO_ID, 
-                                                 currentServoPositions[GRIPPER_SERVO_ID - 1] - 50);
-        sendServoCommand(MOVE_SINGLE_SERVO, GRIPPER_SERVO_ID, position, 500);
-    }
-    
-    // 如果任何摇杆有移动，更新相应舵机位置
-    if (baseIncrement != 0) {
-        uint16_t position = constrainServoPosition(BASE_SERVO_ID, 
-                                                currentServoPositions[BASE_SERVO_ID - 1] + 
-                                                baseIncrement * servoDirections[BASE_SERVO_ID - 1]);
-        sendServoCommand(MOVE_SINGLE_SERVO, BASE_SERVO_ID, position, 20);
-    }
-    
-    if (shoulderIncrement != 0) {
-        uint16_t position = constrainServoPosition(SHOULDER_PITCH_ID, 
-                                                currentServoPositions[SHOULDER_PITCH_ID - 1] + 
-                                                shoulderIncrement * servoDirections[SHOULDER_PITCH_ID - 1]);
-        sendServoCommand(MOVE_SINGLE_SERVO, SHOULDER_PITCH_ID, position, 20);
-    }
-    
-    if (elbowIncrement != 0) {
-        uint16_t position = constrainServoPosition(ELBOW_SERVO_ID, 
-                                                currentServoPositions[ELBOW_SERVO_ID - 1] + 
-                                                elbowIncrement * servoDirections[ELBOW_SERVO_ID - 1]);
-        sendServoCommand(MOVE_SINGLE_SERVO, ELBOW_SERVO_ID, position, 20);
-    }
-    
-    if (wristIncrement != 0) {
-        uint16_t position = constrainServoPosition(WRIST_PITCH_ID, 
-                                                currentServoPositions[WRIST_PITCH_ID - 1] + 
-                                                wristIncrement * servoDirections[WRIST_PITCH_ID - 1]);
-        sendServoCommand(MOVE_SINGLE_SERVO, WRIST_PITCH_ID, position, 20);
-    }
-    
-    // 功能按键
-    if (ps2x.ButtonPressed(PSB_START)) {
-        // 回到初始位置
-        moveToHomePosition();
-    }
-    
-    if (ps2x.ButtonPressed(PSB_SELECT)) {
-        // 掉电所有舵机
-        sendServoCommand(UNLOAD_SERVOS);
-    }
-    
-    // 其他按钮的功能可以根据需要添加
 }
 
 // 状态监控任务 - 基础系统状态监控
 void statusMonitorTask(void *pvParameters) {
-    Serial.println("状态监控任务已启动");
+    // 移除任务启动提示
     
     for (;;) {
         // 此任务保留为框架，但移除了电池电压监控功能
@@ -347,10 +316,8 @@ void statusMonitorTask(void *pvParameters) {
 
 // 获取当前舵机位置 - 供WebServerController使用
 uint16_t getCurrentServoPosition(uint8_t servoID) {
-    if (servoID >= 1 && servoID <= SERVO_COUNT) {
-        return currentServoPositions[servoID - 1];
-    }
-    return 0;
+    // 使用RobotArmController获取最新位置
+    return armController.getServoPosition(servoID);
 }
 
 // 发送舵机命令到队列
@@ -395,84 +362,8 @@ void moveAllServos(LobotServo servos[], uint8_t count, uint16_t time) {
     xQueueSend(servoCommandQueue, &command, portMAX_DELAY);
 }
 
-// 约束舵机角度在有效范围内
+// 约束舵机角度在有效范围内 - 使用RobotArmController
 uint16_t constrainServoPosition(uint8_t servoID, uint16_t position) {
-    uint16_t minPos, maxPos;
-    
-    // 根据是否使用自定义限位来确定限位值
-    if (useCustomLimits) {
-        switch (servoID) {
-            case BASE_SERVO_ID:
-                minPos = CUSTOM_BASE_MIN;
-                maxPos = CUSTOM_BASE_MAX;
-                break;
-            case SHOULDER_PITCH_ID:
-            case SHOULDER_ROLL_ID:
-                minPos = CUSTOM_SHOULDER_MIN;
-                maxPos = CUSTOM_SHOULDER_MAX;
-                break;
-            case ELBOW_SERVO_ID:
-                minPos = CUSTOM_ELBOW_MIN;
-                maxPos = CUSTOM_ELBOW_MAX;
-                break;
-            case WRIST_PITCH_ID:
-                minPos = CUSTOM_WRIST_PITCH_MIN;
-                maxPos = CUSTOM_WRIST_PITCH_MAX;
-                break;
-            case WRIST_ROLL_ID:
-                minPos = CUSTOM_WRIST_ROLL_MIN;
-                maxPos = CUSTOM_WRIST_ROLL_MAX;
-                break;
-            case WRIST_YAW_ID:
-                minPos = CUSTOM_WRIST_YAW_MIN;
-                maxPos = CUSTOM_WRIST_YAW_MAX;
-                break;
-            case GRIPPER_SERVO_ID:
-                minPos = CUSTOM_GRIPPER_MIN;
-                maxPos = CUSTOM_GRIPPER_MAX;
-                break;
-            default:
-                minPos = SERVO_MIN_PULSE;
-                maxPos = SERVO_MAX_PULSE;
-        }
-    } else {
-        // 使用默认限位
-        switch (servoID) {
-            case BASE_SERVO_ID:
-                minPos = BASE_MIN_ANGLE;
-                maxPos = BASE_MAX_ANGLE;
-                break;
-            case SHOULDER_PITCH_ID:
-            case SHOULDER_ROLL_ID:
-                minPos = SHOULDER_MIN_ANGLE;
-                maxPos = SHOULDER_MAX_ANGLE;
-                break;
-            case ELBOW_SERVO_ID:
-                minPos = ELBOW_MIN_ANGLE;
-                maxPos = ELBOW_MAX_ANGLE;
-                break;
-            case WRIST_PITCH_ID:
-                minPos = WRIST_PITCH_MIN;
-                maxPos = WRIST_PITCH_MAX;
-                break;
-            case WRIST_ROLL_ID:
-                minPos = WRIST_ROLL_MIN;
-                maxPos = WRIST_ROLL_MAX;
-                break;
-            case WRIST_YAW_ID:
-                minPos = WRIST_YAW_MIN;
-                maxPos = WRIST_YAW_MAX;
-                break;
-            case GRIPPER_SERVO_ID:
-                minPos = GRIPPER_MIN;
-                maxPos = GRIPPER_MAX;
-                break;
-            default:
-                minPos = SERVO_MIN_PULSE;
-                maxPos = SERVO_MAX_PULSE;
-        }
-    }
-    
-    // 约束在范围内
-    return constrain(position, minPos, maxPos);
+    // 委托给RobotArmController进行位置约束
+    return armController.constrainServoAngle(servoID, position);
 }

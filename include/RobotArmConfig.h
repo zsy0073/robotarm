@@ -110,11 +110,16 @@
 #define FAST_MOVE_TIME      500   // 快速运动时间(毫秒)
 #define SLOW_MOVE_TIME      2000  // 慢速运动时间(毫秒)
 
+
+// ESP32S3与舵机控制板通信引脚
+#define SERVO_SERIAL_TX     16    // ESP32S3连接舵机控制板的TX引脚
+#define SERVO_SERIAL_RX     17    // ESP32S3连接舵机控制板的RX引脚
+
 // PS2手柄控制参数
-#define PS2_DAT_PIN         13    // PS2手柄数据引脚
+#define PS2_DAT_PIN         12    // PS2手柄数据引脚
 #define PS2_CMD_PIN         11    // PS2手柄命令引脚
 #define PS2_SEL_PIN         10    // PS2手柄选择引脚
-#define PS2_CLK_PIN         12    // PS2手柄时钟引脚
+#define PS2_CLK_PIN         9    // PS2手柄时钟引脚
 
 // 串口通信参数
 #define SERIAL_BAUDRATE     115200

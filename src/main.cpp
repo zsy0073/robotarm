@@ -9,17 +9,14 @@
 #include "RobotArmConfig.h"
 #include "WebServerController.h"
 
+
 void setup() {
   // 初始化串口通信
   Serial.begin(SERIAL_BAUDRATE);
-  Serial.println("机械臂控制系统启动中...");
+  // 移除启动提示
   
   // 初始化FreeRTOS任务和资源
-  if (!initRobotArmTasks()) {
-    Serial.println("FreeRTOS任务初始化失败，系统无法正常工作");
-  } else {
-    Serial.println("FreeRTOS任务初始化成功，系统开始运行");
-  }
+  initRobotArmTasks();
   
   // FreeRTOS任务已经在initRobotArmTasks中创建并运行
   // 包括Web服务器任务

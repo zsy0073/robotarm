@@ -11,6 +11,7 @@
 #include "PS2X_lib.h"
 #include "LobotServoController.h"
 #include "RobotArmConfig.h"
+#include "RobotArmCommon.h" // 使用共享头文件获取ServoCommandType等类型定义
 
 class RobotArmController {
 public:
@@ -22,6 +23,39 @@ public:
     
     // 主循环函数 - 在Arduino的loop函数中调用
     void update();
+    
+    // 新增接口函数，支持与FreeRTOS集成
+    
+    // 初始化PS2控制器，返回错误码
+    int initializePS2(uint8_t clkPin, uint8_t cmdPin, uint8_t selPin, uint8_t datPin);
+    
+    // 处理PS2输入并生成命令
+    bool processPS2AndGenerateCommands(ServoCommandType& type, uint8_t& servoCount, 
+                                      LobotServo servos[], uint16_t& time);
+    
+    // 获取当前舵机位置
+    uint16_t getServoPosition(uint8_t servoID);
+    
+    // 设置舵机位置（供外部调用）
+    void setServoPosition(uint8_t servoID, uint16_t position);
+    
+    // 移动到初始位置
+    void moveToInitialPosition();
+    
+    // 约束舵机角度在有效范围内
+    uint16_t constrainServoAngle(uint8_t servoID, uint16_t pulseValue);
+    
+    // 掉电所有舵机（供外部调用）
+    void unloadAllServos();
+    
+    // 访问当前位置数组（使其对友元类可见）
+    uint16_t* getCurrentPositions() { return currentPosition; }
+    
+    // 获取舵机控制器对象的引用
+    LobotServoController& getServoController() { return controller; }
+    
+    // 移动舵机组
+    void moveServos();
     
 private:
     // PS2控制器对象
@@ -64,10 +98,9 @@ private:
     // 辅助功能函数
     int initPS2Controller();
     void initRobotArm();
-    uint16_t constrainServoAngle(uint8_t servoID, uint16_t pulseValue);
     int calculateServoSpeed(int stickValue, int servoIndex);
     void updateServoDirections();
-    void moveServos();
+
 };
 
 #endif // ROBOT_ARM_CONTROLLER_H
