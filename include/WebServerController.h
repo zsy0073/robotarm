@@ -91,7 +91,12 @@ private:
     static bool initPresetStorage();
     static bool savePresetToStorage(const char* name, uint16_t positions[]);
     static bool loadPresetFromStorage(const char* name, uint16_t positions[]);
+    static bool deletePreset(const char* presetId);  // 添加删除预设函数声明
     static void getPresetsList(JsonArray& presetsArray);
+    
+    // 录制命令状态相关方法
+    static void handleGetRecorderStatus(AsyncWebServerRequest *request);
+    static void handleGetRecordedCommands(AsyncWebServerRequest *request);
     
     // 辅助函数 - 用于约束舵机位置
     static uint16_t constrainServoPosition(uint8_t servoId, uint16_t position);

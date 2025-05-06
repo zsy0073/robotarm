@@ -90,7 +90,8 @@ void WebServerController::setupRoutes() {
             Serial.println(time);
             
             // 准备舵机组命令
-            uint8_t servoCount = min((int)servosArray.size(), SERVO_COUNT);
+            uint8_t servoCount = min((int)servosArray.size(), (int)SERVO_COUNT);
+            
             LobotServo servos[SERVO_COUNT];
             
             for (uint8_t i = 0; i < servoCount; i++) {
@@ -183,6 +184,120 @@ void WebServerController::setupRoutes() {
         }
     });
     webServer->addHandler(loadPresetHandler);
+    
+    // 添加录制和回放相关API
+    
+    // API - 开始录制
+    AsyncCallbackJsonWebHandler* startRecordingHandler = new AsyncCallbackJsonWebHandler("/api/record/start", [](AsyncWebServerRequest *request, JsonVariant &json) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        String fileName = "/record_default.json"; // 默认文件名
+        
+        if (jsonObj.containsKey("fileName")) {
+            fileName = jsonObj["fileName"].as<String>();
+        }
+        
+        bool success = startRecording(fileName.c_str());
+        if (success) {
+            request->send(200, "text/plain", "Recording started");
+        } else {
+            request->send(500, "text/plain", "Failed to start recording");
+        }
+    });
+    webServer->addHandler(startRecordingHandler);
+    
+    // API - 停止录制
+    webServer->on("/api/record/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
+        bool success = stopRecording();
+        
+        DynamicJsonDocument doc(128);
+        doc["success"] = success;
+        doc["frameCount"] = getRecordFrameCount();
+        
+        String response;
+        serializeJson(doc, response);
+        
+        request->send(success ? 200 : 500, "application/json", response);
+    });
+    
+    // API - 获取录制文件列表
+    webServer->on("/api/record/files", HTTP_GET, [](AsyncWebServerRequest *request) {
+        DynamicJsonDocument doc(4096);
+        JsonArray filesArray = doc.createNestedArray("files");
+        
+        listRecordFiles(filesArray);
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    });
+    
+    // API - 播放录制文件
+    AsyncCallbackJsonWebHandler* playRecordingHandler = new AsyncCallbackJsonWebHandler("/api/record/play", [](AsyncWebServerRequest *request, JsonVariant &json) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        
+        if (jsonObj.containsKey("fileName")) {
+            String fileName = jsonObj["fileName"].as<String>();
+            bool success = startPlayback(fileName.c_str());
+            
+            if (success) {
+                request->send(200, "text/plain", "Playback started");
+            } else {
+                request->send(500, "text/plain", "Failed to start playback");
+            }
+        } else {
+            request->send(400, "text/plain", "Missing fileName parameter");
+        }
+    });
+    webServer->addHandler(playRecordingHandler);
+    
+    // API - 停止回放
+    webServer->on("/api/record/stop-play", HTTP_POST, [](AsyncWebServerRequest *request) {
+        stopPlayback();
+        request->send(200, "text/plain", "Playback stopped");
+    });
+    
+    // API - 删除录制文件
+    AsyncCallbackJsonWebHandler* deleteRecordingHandler = new AsyncCallbackJsonWebHandler("/api/record/delete", [](AsyncWebServerRequest *request, JsonVariant &json) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        
+        if (jsonObj.containsKey("fileName")) {
+            String fileName = jsonObj["fileName"].as<String>();
+            bool success = deleteRecordFile(fileName.c_str());
+            
+            if (success) {
+                request->send(200, "text/plain", "Recording file deleted");
+            } else {
+                request->send(500, "text/plain", "Failed to delete recording file");
+            }
+        } else {
+            request->send(400, "text/plain", "Missing fileName parameter");
+        }
+    });
+    webServer->addHandler(deleteRecordingHandler);
+    
+    // API - 获取录制器状态
+    webServer->on("/api/record/status", HTTP_GET, handleGetRecorderStatus);
+
+    // API - 获取录制的命令
+    webServer->on("/api/record/commands", HTTP_GET, handleGetRecordedCommands);
+
+    // API - 删除预设
+    AsyncCallbackJsonWebHandler* deletePresetHandler = new AsyncCallbackJsonWebHandler("/api/preset/delete", [](AsyncWebServerRequest *request, JsonVariant &json) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        if (jsonObj.containsKey("id")) {
+            String presetId = jsonObj["id"].as<String>();
+            bool success = deletePreset(presetId.c_str());
+            
+            if (success) {
+                request->send(200, "text/plain", "Preset deleted");
+            } else {
+                request->send(404, "text/plain", "Preset not found");
+            }
+        } else {
+            request->send(400, "text/plain", "Missing preset id");
+        }
+    });
+    webServer->addHandler(deletePresetHandler);
 }
 
 // 处理主页请求
@@ -294,24 +409,43 @@ void WebServerController::sendServoGroupCommand(ServoCommandType type, uint8_t s
         // 根据命令类型执行不同操作
         switch (type) {
             case MOVE_ALL_SERVOS:
-                Serial.print("发送舵机组控制命令: 舵机数量=");
-                Serial.print(servoCount);
-                Serial.print(", 时间=");
-                Serial.println(time);
-                
                 // 使用外部函数通过FreeRTOS队列发送命令，确保与PS2控制器使用同样的执行路径
                 moveAllServos(servos, servoCount, time);
                 
-                // 记录日志，但不直接更新位置数组（由servoControlTask负责更新）
-                for (uint8_t i = 0; i < servoCount; i++) {
-                    uint8_t servoId = servos[i].ID;
-                    uint16_t position = servos[i].Position;
-                    
-                    Serial.print("Web控制：舵机ID=");
-                    Serial.print(servoId);
-                    Serial.print(", 目标位置=");
-                    Serial.println(position);
+                // 与PS2控制器输出格式保持一致
+                Serial.print("舵机组命令：[");
+                // 输出角度值数组
+                for (int i = 0; i < SERVO_COUNT; i++) {
+                    // 查找当前舵机ID是否在命令中
+                    bool found = false;
+                    uint16_t position = (armController != nullptr) ? armController->getCurrentPositions()[i] : 500;
+                    for (uint8_t j = 0; j < servoCount; j++) {
+                        if (servos[j].ID == i + 1) {
+                            position = servos[j].Position;
+                            found = true;
+                            break;
+                        }
+                    }
+                    Serial.print(PULSE_TO_DEGREE(position), 1); // 保留1位小数
+                    if (i < SERVO_COUNT - 1) Serial.print("、");
                 }
+                Serial.print("][");
+                // 输出脉冲值数组
+                for (int i = 0; i < SERVO_COUNT; i++) {
+                    // 查找当前舵机ID是否在命令中
+                    bool found = false;
+                    uint16_t position = (armController != nullptr) ? armController->getCurrentPositions()[i] : 500;
+                    for (uint8_t j = 0; j < servoCount; j++) {
+                        if (servos[j].ID == i + 1) {
+                            position = servos[j].Position;
+                            found = true;
+                            break;
+                        }
+                    }
+                    Serial.print(position);
+                    if (i < SERVO_COUNT - 1) Serial.print("、");
+                }
+                Serial.println("]");
                 break;
                 
             default:
@@ -353,7 +487,37 @@ void WebServerController::moveToHomePosition() {
     if (armController != nullptr) {
         Serial.println("发送回到初始位置命令");
         
-        // 创建回到初始位置命令
+        // 创建回到初始位置命令 - 同时直接发送舵机组控制指令
+        // 创建舵机控制数组，使用配置文件中定义的初始位置值
+        LobotServo servos[SERVO_COUNT];
+        servos[0].ID = BASE_SERVO_ID;
+        servos[0].Position = HOME_BASE;
+        
+        servos[1].ID = SHOULDER_PITCH_ID;
+        servos[1].Position = HOME_SHOULDER;
+        
+        servos[2].ID = SHOULDER_ROLL_ID;
+        servos[2].Position = HOME_SHOULDER;
+        
+        servos[3].ID = ELBOW_SERVO_ID;
+        servos[3].Position = HOME_ELBOW;
+        
+        servos[4].ID = WRIST_PITCH_ID;
+        servos[4].Position = HOME_WRIST_PITCH;
+        
+        servos[5].ID = WRIST_ROLL_ID;
+        servos[5].Position = HOME_WRIST_ROLL;
+        
+        servos[6].ID = WRIST_YAW_ID;
+        servos[6].Position = HOME_WRIST_YAW;
+        
+        servos[7].ID = GRIPPER_SERVO_ID;
+        servos[7].Position = HOME_GRIPPER;
+        
+        // 发送舵机组控制命令 - 直接移动所有舵机到初始位置
+        sendServoGroupCommand(MOVE_ALL_SERVOS, SERVO_COUNT, servos, 1000);
+        
+        // 同时发送队列命令，确保所有处理路径都能接收到
         ServoCommand_t command;
         command.type = MOVE_TO_HOME;
         command.time = 1000; // 1秒内完成移动
@@ -444,16 +608,6 @@ bool WebServerController::savePresetToStorage(const char* name, uint16_t positio
     
     // 如果不存在，创建新的预设
     if (!found) {
-        // 如果超过最大预设数量，移除最老的预设
-        if (presets.size() >= MAX_PRESETS) {
-            // 移除第一个元素
-            for (size_t i = 0; i < presets.size() - 1; i++) {
-                presets[i] = presets[i + 1];
-            }
-            presets.remove(presets.size() - 1);
-        }
-        
-        // 添加新的预设
         JsonObject newPreset = presets.createNestedObject();
         newPreset["name"] = name;
         JsonArray positionsArray = newPreset.createNestedArray("positions");
@@ -462,10 +616,10 @@ bool WebServerController::savePresetToStorage(const char* name, uint16_t positio
         }
     }
     
-    // 保存回文件
+    // 将更新后的预设写回文件
     file = SPIFFS.open(PRESET_FILE, FILE_WRITE);
     if (!file) {
-        Serial.println("打开预设文件进行写入失败");
+        Serial.println("打开预设文件失败");
         return false;
     }
     
@@ -550,12 +704,156 @@ void WebServerController::getPresetsList(JsonArray& presetsArray) {
         return;
     }
     
-    // 只返回名称列表
+    // 返回名称和ID列表
     JsonArray filePresets = doc.as<JsonArray>();
+    int index = 0;
     for (JsonObject preset : filePresets) {
         String name = preset["name"].as<String>();
-        presetsArray.add(name);
+        
+        // 创建预设对象，包含ID和名称
+        JsonObject presetObj = presetsArray.createNestedObject();
+        presetObj["id"] = name;  // 使用name作为ID
+        presetObj["name"] = name;
+        
+        index++;
     }
+}
+
+// 删除预设
+bool WebServerController::deletePreset(const char* presetId) {
+    // 确保SPIFFS已初始化
+    if (!SPIFFS.exists(PRESET_FILE)) {
+        if (!initPresetStorage()) {
+            return false;
+        }
+    }
+    
+    // 读取现有预设
+    File file = SPIFFS.open(PRESET_FILE, FILE_READ);
+    if (!file) {
+        Serial.println("打开预设文件失败");
+        return false;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        Serial.println("解析预设JSON失败");
+        return false;
+    }
+    
+    JsonArray presets = doc.as<JsonArray>();
+    bool found = false;
+    
+    // 创建新数组存储保留的预设
+    DynamicJsonDocument newDoc(4096);
+    JsonArray newPresets = newDoc.createNestedArray();
+    
+    // 遍历所有预设，复制非目标预设
+    for (JsonObject preset : presets) {
+        if (preset["name"] != presetId) {
+            JsonObject newPreset = newPresets.createNestedObject();
+            newPreset["name"] = preset["name"];
+            
+            JsonArray oldPositions = preset["positions"];
+            JsonArray newPositions = newPreset.createNestedArray("positions");
+            
+            for (JsonVariant pos : oldPositions) {
+                newPositions.add(pos.as<uint16_t>());
+            }
+        } else {
+            found = true;
+            Serial.print("找到要删除的预设 '");
+            Serial.print(presetId);
+            Serial.println("'");
+        }
+    }
+    
+    if (!found) {
+        Serial.print("未找到要删除的预设 '");
+        Serial.print(presetId);
+        Serial.println("'");
+        return false;
+    }
+    
+    // 将新的预设列表写回文件
+    file = SPIFFS.open(PRESET_FILE, FILE_WRITE);
+    if (!file) {
+        Serial.println("打开预设文件写入失败");
+        return false;
+    }
+    
+    serializeJson(newPresets, file);
+    file.close();
+    
+    Serial.print("预设 '");
+    Serial.print(presetId);
+    Serial.println("' 已成功删除");
+    return true;
+}
+
+// 获取录制器状态
+void WebServerController::handleGetRecorderStatus(AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(256);
+    
+    // 获取录制状态
+    if (isRecording()) {
+        doc["state"] = "recording";
+        doc["frameCount"] = getRecordFrameCount();
+    } else if (isPlaying()) {
+        doc["state"] = "playing";
+    } else {
+        doc["state"] = "idle";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+// 获取录制的命令
+void WebServerController::handleGetRecordedCommands(AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(1024);
+    
+    // 创建命令数组
+    JsonArray commandsArray = doc.createNestedArray("commands");
+    
+    // 添加最新记录的舵机命令
+    // 这里我们只获取最近的5条记录，避免数据量过大
+    extern ServoCommandRecorder servoRecorder;
+    
+    // 获取当前录制状态
+    if (isRecording()) {
+        doc["state"] = "recording";
+        doc["frameCount"] = getRecordFrameCount();
+        
+        // TODO: 在ServoCommandRecorder类中添加获取最近命令的方法
+        // 暂时使用简单的状态信息
+        JsonObject cmdObj = commandsArray.createNestedObject();
+        cmdObj["time"] = millis();
+        cmdObj["type"] = "info";
+        cmdObj["text"] = "已记录 " + String(getRecordFrameCount()) + " 帧命令";
+    } else if (isPlaying()) {
+        doc["state"] = "playing";
+        
+        JsonObject cmdObj = commandsArray.createNestedObject();
+        cmdObj["time"] = millis();
+        cmdObj["type"] = "info";
+        cmdObj["text"] = "正在播放录制的动作组";
+    } else {
+        doc["state"] = "idle";
+        
+        JsonObject cmdObj = commandsArray.createNestedObject();
+        cmdObj["time"] = millis();
+        cmdObj["type"] = "info";
+        cmdObj["text"] = "等待录制命令...";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
 }
 
 // Web服务器任务实现
@@ -573,8 +871,8 @@ void webServerTask(void *pvParameters) {
     // 使用外部定义的全局机械臂控制器实例
     extern RobotArmController armController;
     webServerController.setRobotArmController(&armController);
-
     
+    // 启动Web服务器
     webServerController.start();
     
     // 任务保持运行

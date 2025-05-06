@@ -108,6 +108,25 @@ const char index_html[] PROGMEM = R"rawliteral(
       justify-content: space-between;
       margin-top: 20px;
     }
+    /* 添加录制和回放按钮的样式 */
+    .record {
+      background-color: #ff0000;
+    }
+    .record:hover {
+      background-color: #cc0000;
+    }
+    .stop-record {
+      background-color: #ff6600;
+    }
+    .stop-record:hover {
+      background-color: #cc5200;
+    }
+    .play {
+      background-color: #00cc00;
+    }
+    .play:hover {
+      background-color: #009900;
+    }
     /* 预设位置相关样式 */
     .preset-section {
       margin-top: 30px;
@@ -116,38 +135,88 @@ const char index_html[] PROGMEM = R"rawliteral(
       border-radius: 5px;
       border: 1px solid #ccc;
     }
-    .preset-controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      align-items: center;
-      margin-bottom: 10px;
+    /* 添加录制文件管理区域样式 */
+    .files-section {
+      margin-top: 30px;
+      padding: 15px;
+      background-color: #e9f2f9;
+      border-radius: 5px;
+      border: 1px solid #c2d6e4;
     }
-    .preset-controls input, .preset-controls select {
-      padding: 8px;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-    }
-    .preset-controls input {
-      flex-grow: 1;
-      min-width: 150px;
-    }
-    .preset-buttons {
-      display: flex;
-      gap: 10px;
+    .files-list {
+      max-height: 200px;
+      overflow-y: auto;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      padding: 10px;
       margin-top: 10px;
+      border-radius: 3px;
     }
-    .save-preset {
-      background-color: #ff9800;
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      border-bottom: 1px solid #eee;
     }
-    .save-preset:hover {
-      background-color: #e68a00;
+    .file-name {
+      flex-grow: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-right: 10px;
     }
-    .load-preset {
-      background-color: #9c27b0;
+    .delete-file {
+      background-color: #f44336;
+      padding: 5px 10px;
+      font-size: 14px;
     }
-    .load-preset:hover {
-      background-color: #7b1fa2;
+    .delete-file:hover {
+      background-color: #d32f2f;
+    }
+    .file-buttons {
+      margin-top: 10px;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .refresh-files {
+      background-color: #2196F3;
+      margin-right: 10px;
+    }
+    .refresh-files:hover {
+      background-color: #0b7dda;
+    }
+    /* 添加录制命令显示区样式 */
+    .record-commands-section {
+      margin-top: 30px;
+      padding: 15px;
+      background-color: #f9f2f4;
+      border-radius: 5px;
+      border: 1px solid #e3bfc7;
+    }
+    .record-commands-area {
+      max-height: 200px;
+      overflow-y: auto;
+      background-color: #fff;
+      border: 1px solid #ddd;
+      padding: 10px;
+      font-family: monospace;
+      margin-top: 10px;
+      border-radius: 3px;
+    }
+    .record-status {
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .recording {
+      color: #ff0000;
+    }
+    .playing {
+      color: #00cc00;
+    }
+    .idle {
+      color: #666;
     }
   </style>
 </head>
@@ -241,6 +310,9 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     <div class="action-buttons">
       <button class="home" onclick="moveHome()">回到初始位置</button>
+      <button class="record" onclick="startRecording()">录制动作组</button>
+      <button class="stop-record" onclick="stopRecording()">停止录制</button>
+      <button class="play" onclick="playRecording()">播放动作组</button>
       <button class="unload" onclick="unloadServos()">掉电所有舵机</button>
     </div>
     
@@ -256,6 +328,33 @@ const char index_html[] PROGMEM = R"rawliteral(
       <div class="preset-buttons">
         <button class="save-preset" onclick="savePreset()">保存当前位置</button>
         <button class="load-preset" onclick="loadPreset()">加载选中预设</button>
+        <button class="delete-preset" style="background-color: #f44336;" onclick="deletePreset()">删除预设</button>
+      </div>
+    </div>
+    
+    <!-- 添加录制命令显示区域 -->
+    <div class="record-commands-section">
+      <h2>录制状态</h2>
+      <div class="record-status">
+        当前状态: <span id="recorderStatus" class="idle">空闲</span>
+        <span id="frameCounter"></span>
+      </div>
+      <div class="record-commands-area" id="recordCommands">
+        <!-- 录制的命令将显示在这里 -->
+        <div>等待录制命令...</div>
+      </div>
+    </div>
+
+    <!-- 添加录制文件管理区域 -->
+    <div class="files-section">
+      <h2>录制文件管理</h2>
+      <div class="files-list" id="filesContainer">
+        <!-- 录制的文件将显示在这里 -->
+        <div>加载录制文件列表中...</div>
+      </div>
+      <div class="file-buttons">
+        <button class="refresh-files" onclick="refreshRecordFiles()">刷新文件列表</button>
+        <button class="play" onclick="showPlayDialog()">选择文件播放</button>
       </div>
     </div>
   </div>
@@ -264,6 +363,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     // 全局变量，控制轮询间隔
     var pollingInterval = 10; // 毫秒
     var pollingTimer = null;
+    var recordStatusTimer = null; // 录制状态轮询计时器
     var lastPositions = [0, 0, 0, 0, 0, 0, 0, 0];
     var sliderDebounceTimers = {}; // 用于滑块的防抖计时器
     var servoMotion = {}; // 用于存储舵机运动状态
@@ -275,12 +375,16 @@ const char index_html[] PROGMEM = R"rawliteral(
       fetchAllServoPositions();
       // 启动定期轮询
       startPolling();
+      // 启动录制状态轮询
+      startRecordStatusPolling();
       // 为按钮添加长按事件
       setupButtonPressEvents();
       // 加载预设列表
       loadPresetList();
       // 设置滑条事件
       setupSliderEvents();
+      // 获取录制文件列表
+      fetchRecordFiles();
     }
     
     // 启动轮询
@@ -298,6 +402,101 @@ const char index_html[] PROGMEM = R"rawliteral(
         pollingTimer = null;
         console.log("停止位置数据轮询");
       }
+    }
+
+    // 启动录制状态轮询
+    function startRecordStatusPolling() {
+      if (recordStatusTimer === null) {
+        recordStatusTimer = setInterval(fetchRecorderStatus, 500); // 每500ms轮询一次
+        console.log("开始录制状态轮询，间隔：500ms");
+      }
+    }
+    
+    // 停止录制状态轮询
+    function stopRecordStatusPolling() {
+      if (recordStatusTimer !== null) {
+        clearInterval(recordStatusTimer);
+        recordStatusTimer = null;
+        console.log("停止录制状态轮询");
+      }
+    }
+
+    // 获取录制状态和命令信息
+    function fetchRecorderStatus() {
+      fetch('/api/record/status')
+      .then(response => response.json())
+      .then(data => {
+        // 更新状态显示
+        const statusElem = document.getElementById('recorderStatus');
+        const frameCounterElem = document.getElementById('frameCounter');
+        
+        // 移除所有类名并添加新的类名
+        statusElem.className = '';
+        
+        if (data.state === 'recording') {
+          statusElem.classList.add('recording');
+          statusElem.textContent = '录制中';
+          frameCounterElem.textContent = ` - 已录制 ${data.frameCount} 帧`;
+          
+          // 获取命令列表
+          fetchRecordedCommands();
+        } else if (data.state === 'playing') {
+          statusElem.classList.add('playing');
+          statusElem.textContent = '播放中';
+          frameCounterElem.textContent = '';
+          
+          // 获取命令列表
+          fetchRecordedCommands();
+        } else {
+          statusElem.classList.add('idle');
+          statusElem.textContent = '空闲';
+          frameCounterElem.textContent = '';
+        }
+      })
+      .catch(error => {
+        console.error("获取录制状态时出错：", error);
+      });
+    }
+    
+    // 获取录制的命令信息
+    function fetchRecordedCommands() {
+      fetch('/api/record/commands')
+      .then(response => response.json())
+      .then(data => {
+        const commandsArea = document.getElementById('recordCommands');
+        
+        // 如果有命令数据，则更新显示
+        if (data.commands && data.commands.length > 0) {
+          // 清空现有内容
+          commandsArea.innerHTML = '';
+          
+          // 添加新的命令
+          data.commands.forEach(cmd => {
+            const cmdElem = document.createElement('div');
+            
+            // 根据命令类型设置样式
+            if (cmd.type === 'info') {
+              cmdElem.className = 'info-message';
+            } else if (cmd.type === 'error') {
+              cmdElem.className = 'error-message';
+            } else {
+              cmdElem.className = 'command-message';
+            }
+            
+            // 设置内容
+            cmdElem.textContent = cmd.text;
+            
+            // 添加到显示区域
+            commandsArea.appendChild(cmdElem);
+          });
+          
+          // 滚动到最底部
+          commandsArea.scrollTop = commandsArea.scrollHeight;
+        }
+      })
+      .catch(error => {
+        console.error("获取录制命令时出错：", error);
+      });
     }
 
     // 获取所有舵机位置
@@ -533,18 +732,55 @@ const char index_html[] PROGMEM = R"rawliteral(
       // 暂时停止轮询
       stopPolling();
       
+      // 添加"回到初始位置中..."提示
+      const homeButton = document.querySelector('.home');
+      const originalText = homeButton.textContent;
+      homeButton.textContent = '位置复位中...';
+      homeButton.disabled = true;
+      
+      // 先立即更新界面上的滑块到初始位置值
+      const initialPositions = [500, 500, 500, 500, 500, 500, 500, 0]; // 初始位置值
+      updateUIWithPositions(initialPositions);
+      
+      // 更新本地存储的位置
+      for (let i = 0; i < initialPositions.length; i++) {
+        lastPositions[i] = initialPositions[i];
+      }
+      
       fetch('/api/home', {
         method: 'POST'
       })
       .then(response => {
         if (response.ok) {
           console.log('已发送回到初始位置命令');
+          
+          // 创建动画效果，显示舵机正在移动
+          const animationInterval = setInterval(() => {
+            homeButton.textContent += '.';
+            if (homeButton.textContent.endsWith('位置复位中......')) {
+              homeButton.textContent = '位置复位中';
+            }
+          }, 300);
+          
           // 延迟后获取最新位置并重新启动轮询
           setTimeout(() => {
+            clearInterval(animationInterval);
+            homeButton.textContent = originalText;
+            homeButton.disabled = false;
             fetchAllServoPositions();
             startPolling();
-          }, 2000);
+          }, 2000); // 增加延迟时间，确保动作完成
+        } else {
+          homeButton.textContent = originalText;
+          homeButton.disabled = false;
+          startPolling();
         }
+      })
+      .catch(error => {
+        console.error('回到初始位置出错:', error);
+        homeButton.textContent = originalText;
+        homeButton.disabled = false;
+        startPolling();
       });
     }
 
@@ -655,7 +891,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ id: presetId })
+        body: JSON.stringify({ name: presetId }) // 使用name参数而非id
       })
       .then(response => {
         if (response.ok) {
@@ -674,6 +910,43 @@ const char index_html[] PROGMEM = R"rawliteral(
         console.error("加载预设位置时出错：", error);
         alert('加载预设位置时发生错误！');
         startPolling();
+      });
+    }
+
+    // 删除预设位置
+    function deletePreset() {
+      const presetSelect = document.getElementById('presetSelect');
+      const presetId = presetSelect.value;
+      
+      if (!presetId) {
+        alert('请选择要删除的预设位置！');
+        return;
+      }
+      
+      if (!confirm(`确定要删除预设"${presetSelect.options[presetSelect.selectedIndex].text}"吗？`)) {
+        return; // 用户取消删除
+      }
+      
+      // 发送删除预设请求
+      fetch('/api/preset/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ id: presetId })
+      })
+      .then(response => {
+        if (response.ok) {
+          alert('预设位置删除成功！');
+          // 重新加载预设列表
+          loadPresetList();
+        } else {
+          alert('删除预设位置失败，请重试！');
+        }
+      })
+      .catch(error => {
+        console.error("删除预设位置时出错：", error);
+        alert('删除预设位置时发生错误！');
       });
     }
 
@@ -733,6 +1006,250 @@ const char index_html[] PROGMEM = R"rawliteral(
         control.style.userSelect = 'none';
       });
     });
+
+    // 开始录制动作组
+    function startRecording() {
+      // 生成唯一的文件名，使用时间戳
+      const fileName = `/record_web_${Date.now()}.json`;
+      
+      fetch('/api/record/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileName: fileName })
+      })
+      .then(response => {
+        if (response.ok) {
+          alert('开始录制动作组！记录文件名：' + fileName);
+        } else {
+          alert('开始录制失败，请重试！');
+        }
+      })
+      .catch(error => {
+        console.error('开始录制出错：', error);
+        alert('开始录制时发生错误！');
+      });
+    }
+    
+    // 停止录制动作组
+    function stopRecording() {
+      fetch('/api/record/stop', {
+        method: 'POST'
+      })
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error('停止录制失败');
+        }
+      })
+      .then(data => {
+        alert(`停止录制成功！共录制了 ${data.frameCount} 帧动作`);
+      })
+      .catch(error => {
+        console.error('停止录制出错：', error);
+        alert('停止录制时发生错误！');
+      });
+    }
+    
+    // 播放动作组
+    function playRecording() {
+      fetch('/api/record/files')
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error('获取录制文件列表失败');
+        }
+      })
+      .then(data => {
+        if (data.files && data.files.length > 0) {
+          // 获取最新的录制文件
+          const latestFile = data.files[data.files.length - 1];
+          
+          // 播放最新录制的动作组
+          return fetch('/api/record/play', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ fileName: latestFile })
+          });
+        } else {
+          alert('没有找到录制文件！');
+          throw new Error('没有录制文件');
+        }
+      })
+      .then(response => {
+        if (response.ok) {
+          alert('开始播放动作组');
+        } else {
+          alert('播放动作组失败，请重试！');
+        }
+      })
+      .catch(error => {
+        console.error('播放动作组出错：', error);
+      });
+    }
+    
+    // 获取录制文件列表
+    function fetchRecordFiles() {
+      const container = document.getElementById('filesContainer');
+      container.innerHTML = '<div>加载录制文件列表中...</div>';
+      
+      fetch('/api/record/files')
+      .then(response => response.json())
+      .then(data => {
+        // 清空容器
+        container.innerHTML = '';
+        
+        if (data.files && data.files.length > 0) {
+          // 为每个文件创建一个条目
+          data.files.forEach(file => {
+            // 创建文件项容器
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            
+            // 创建文件名显示
+            const fileName = document.createElement('div');
+            fileName.className = 'file-name';
+            // 显示没有路径前缀的文件名
+            const displayName = file.replace(/^\//, ''); // 删除开头的斜杠
+            fileName.textContent = displayName;
+            fileItem.appendChild(fileName);
+            
+            // 创建操作按钮
+            const buttons = document.createElement('div');
+            
+            // 播放按钮
+            const playButton = document.createElement('button');
+            playButton.className = 'play';
+            playButton.textContent = '播放';
+            playButton.onclick = () => playSpecificFile(file);
+            buttons.appendChild(playButton);
+            
+            // 删除按钮
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'delete-file';
+            deleteButton.textContent = '删除';
+            deleteButton.onclick = () => deleteRecordFile(file);
+            buttons.appendChild(deleteButton);
+            
+            fileItem.appendChild(buttons);
+            
+            // 添加到容器
+            container.appendChild(fileItem);
+          });
+        } else {
+          container.innerHTML = '<div>没有找到录制文件</div>';
+        }
+      })
+      .catch(error => {
+        console.error("获取录制文件列表时出错：", error);
+        container.innerHTML = '<div>获取文件列表失败</div>';
+      });
+    }
+    
+    // 刷新文件列表
+    function refreshRecordFiles() {
+      fetchRecordFiles();
+    }
+    
+    // 删除指定的录制文件
+    function deleteRecordFile(fileName) {
+      if (!confirm(`确定要删除文件 ${fileName} 吗？`)) {
+        return; // 用户取消删除
+      }
+      
+      // 确保文件名以/开头
+      const normalizedFileName = fileName.startsWith('/') ? fileName : '/' + fileName;
+      
+      fetch('/api/record/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileName: normalizedFileName })
+      })
+      .then(response => {
+        if (response.ok) {
+          alert(`文件 ${fileName} 已成功删除`);
+          // 刷新文件列表
+          fetchRecordFiles();
+        } else {
+          alert(`删除文件 ${fileName} 失败，请重试`);
+        }
+      })
+      .catch(error => {
+        console.error('删除文件时出错：', error);
+        alert('删除文件时发生错误');
+      });
+    }
+    
+    // 播放指定的录制文件
+    function playSpecificFile(fileName) {
+      // 确保文件名以/开头
+      const normalizedFileName = fileName.startsWith('/') ? fileName : '/' + fileName;
+      
+      fetch('/api/record/play', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ fileName: normalizedFileName })
+      })
+      .then(response => {
+        if (response.ok) {
+          alert(`开始播放文件 ${fileName}`);
+        } else {
+          alert(`播放文件 ${fileName} 失败，请重试`);
+        }
+      })
+      .catch(error => {
+        console.error('播放文件时出错：', error);
+        alert('播放文件时发生错误！');
+      });
+    }
+    
+    // 显示播放对话框
+    function showPlayDialog() {
+      // 获取文件列表
+      fetch('/api/record/files')
+      .then(response => response.json())
+      .then(data => {
+        if (data.files && data.files.length > 0) {
+          // 创建选择框
+          let options = data.files.map(file => 
+            `<option value="${file}">${file.replace(/^\//, '')}</option>`
+          ).join('');
+          
+          // 创建简单的对话框
+          const fileSelect = prompt(
+            "请选择要播放的文件编号:\n\n" + 
+            data.files.map((file, index) => 
+              `${index + 1}. ${file.replace(/^\//, '')}`
+            ).join('\n')
+          );
+          
+          // 检查用户输入
+          if (fileSelect !== null) {
+            const index = parseInt(fileSelect) - 1;
+            if (index >= 0 && index < data.files.length) {
+              playSpecificFile(data.files[index]);
+            } else {
+              alert('请输入有效的文件编号');
+            }
+          }
+        } else {
+          alert('没有找到录制文件！');
+        }
+      })
+      .catch(error => {
+        console.error('获取文件列表时出错：', error);
+        alert('获取文件列表失败');
+      });
+    }
   </script>
 </body>
 </html>

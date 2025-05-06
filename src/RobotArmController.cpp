@@ -5,6 +5,7 @@
 *****************************************************/
 
 #include "RobotArmController.h"
+#include "ServoCommandRecorder.h"
 
 // 构造函数
 RobotArmController::RobotArmController() : 
@@ -118,6 +119,47 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
     
     // 检测三角键是否按下，用于机械臂复位
     bool trianglePressed = ps2x.ButtonPressed(PSB_TRIANGLE);
+    
+    // 检测其他图形键的按下状态
+    bool crossPressed = ps2x.ButtonPressed(PSB_CROSS);     // 十字键，用于开始录制
+    bool circlePressed = ps2x.ButtonPressed(PSB_CIRCLE);   // 圆形键，用于停止录制
+    bool squarePressed = ps2x.ButtonPressed(PSB_SQUARE);   // 方块键，用于播放录制的动作
+    
+    // 检查录制和回放功能的按键
+    if (crossPressed) {
+        // 十字键被按下，开始录制
+        Serial.println("开始录制动作组");
+        // 定义录制文件名为当前时间戳
+        char fileName[32];
+        sprintf(fileName, "/record_%lu.json", millis());
+        servoRecorder.startRecording(fileName);
+        return false; // 不生成实际的舵机命令
+    }
+    
+    if (circlePressed) {
+        // 圆形键被按下，停止录制
+        Serial.println("停止录制动作组");
+        servoRecorder.stopRecording();
+        return false; // 不生成实际的舵机命令
+    }
+    
+    if (squarePressed) {
+        // 方块键被按下，播放最后录制的动作组
+        Serial.println("播放动作组");
+        // 获取记录文件列表，并播放最后一个文件
+        DynamicJsonDocument doc(1024);
+        JsonArray filesArray = doc.createNestedArray("files");
+        servoRecorder.listRecordFiles(filesArray);
+        
+        if (filesArray.size() > 0) {
+            const char* lastFile = filesArray[filesArray.size() - 1];
+            servoRecorder.startPlayback(lastFile);
+        } else {
+            Serial.println("没有找到录制文件");
+        }
+        return false; // 不生成实际的舵机命令
+    }
+    
     if (trianglePressed) {
         // 如果三角键被按下，触发复位功能并立即执行
         type = MOVE_TO_HOME;
@@ -164,8 +206,6 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
     bool l2Pressed = ps2x.Button(PSB_L2);
     bool r1Pressed = ps2x.Button(PSB_R1);
     bool r2Pressed = ps2x.Button(PSB_R2);
-    
-    // SELECT和START按钮的功能已被清空
     
     // 处理所有控制输入，包括摇杆、方向键和按钮
     servoCount = 0;

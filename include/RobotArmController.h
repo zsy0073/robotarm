@@ -12,6 +12,7 @@
 #include "LobotServoController.h"
 #include "RobotArmConfig.h"
 #include "RobotArmCommon.h" // 使用共享头文件获取ServoCommandType等类型定义
+#include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
 
 class RobotArmController {
 public:

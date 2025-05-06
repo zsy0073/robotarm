@@ -6,6 +6,7 @@
 
 #include "RobotArmFreeRTOS.h"
 #include "RobotArmController.h"
+#include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
 
 // 函数前向声明
 void processPS2Input();
@@ -15,6 +16,7 @@ TaskHandle_t servoControlTaskHandle = NULL;
 TaskHandle_t inputProcessingTaskHandle = NULL;
 TaskHandle_t statusMonitorTaskHandle = NULL;
 TaskHandle_t webServerTaskHandle = NULL; // 添加Web服务器任务句柄
+TaskHandle_t playbackTaskHandle = NULL; // 回放任务句柄
 
 // 全局队列句柄
 QueueHandle_t servoCommandQueue = NULL;
@@ -153,6 +155,14 @@ void servoControlTask(void *pvParameters) {
                     servoController.moveServo(command.servoID, command.position, command.time);
                     // 更新RobotArmController中的位置
                     armController.setServoPosition(command.servoID, command.position);
+                    
+                    // 如果处于录制状态，记录该命令
+                    if (servoRecorder.getState() == STATE_RECORDING) {
+                        LobotServo servo;
+                        servo.ID = command.servoID;
+                        servo.Position = command.position;
+                        servoRecorder.recordCommand(MOVE_SINGLE_SERVO, 1, &servo, command.time);
+                    }
                     break;
                     
                 case MOVE_ALL_SERVOS:
@@ -163,11 +173,48 @@ void servoControlTask(void *pvParameters) {
                             armController.setServoPosition(command.servos[i].ID, command.servos[i].Position);
                         }
                     }
+                    
+                    // 如果处于录制状态，记录该命令
+                    if (servoRecorder.getState() == STATE_RECORDING) {
+                        servoRecorder.recordCommand(MOVE_ALL_SERVOS, command.servoCount, command.servos, command.time);
+                    }
                     break;
                     
                 case MOVE_TO_HOME:
                     // 委托RobotArmController移动到初始位置
                     armController.moveToInitialPosition();
+                    
+                    // 如果处于录制状态，记录该命令
+                    if (servoRecorder.getState() == STATE_RECORDING) {
+                        LobotServo servos[SERVO_COUNT];
+                        
+                        // 设置各舵机初始位置
+                        servos[0].ID = BASE_SERVO_ID;
+                        servos[0].Position = HOME_BASE;
+                        
+                        servos[1].ID = SHOULDER_PITCH_ID;
+                        servos[1].Position = HOME_SHOULDER;
+                        
+                        servos[2].ID = SHOULDER_ROLL_ID;
+                        servos[2].Position = HOME_SHOULDER;
+                        
+                        servos[3].ID = ELBOW_SERVO_ID;
+                        servos[3].Position = HOME_ELBOW;
+                        
+                        servos[4].ID = WRIST_PITCH_ID;
+                        servos[4].Position = HOME_WRIST_PITCH;
+                        
+                        servos[5].ID = WRIST_ROLL_ID;
+                        servos[5].Position = HOME_WRIST_ROLL;
+                        
+                        servos[6].ID = WRIST_YAW_ID;
+                        servos[6].Position = HOME_WRIST_YAW;
+                        
+                        servos[7].ID = GRIPPER_SERVO_ID;
+                        servos[7].Position = HOME_GRIPPER;
+                        
+                        servoRecorder.recordCommand(MOVE_ALL_SERVOS, SERVO_COUNT, servos, SLOW_MOVE_TIME);
+                    }
                     break;
                     
                 case UNLOAD_SERVOS:
@@ -180,6 +227,12 @@ void servoControlTask(void *pvParameters) {
                         servoController.setServoUnload(SERVO_COUNT, servoIds[0], servoIds[1], servoIds[2], 
                                                      servoIds[3], servoIds[4], servoIds[5], servoIds[6], 
                                                      servoIds[7]);
+                        
+                        // 如果处于录制状态，记录舵机掉电命令
+                        if (servoRecorder.getState() == STATE_RECORDING) {
+                            // 舵机掉电不需要具体舵机数据
+                            servoRecorder.recordCommand(UNLOAD_SERVOS, 0, NULL, 0);
+                        }
                     }
                     break;
             }
@@ -366,4 +419,140 @@ void moveAllServos(LobotServo servos[], uint8_t count, uint16_t time) {
 uint16_t constrainServoPosition(uint8_t servoID, uint16_t position) {
     // 委托给RobotArmController进行位置约束
     return armController.constrainServoAngle(servoID, position);
+}
+
+// 开始录制
+bool startRecording(const char* fileName) {
+    // 检查是否已经在录制或回放中
+    if (servoRecorder.getState() != STATE_IDLE) {
+        Serial.println("错误：录制器当前不处于空闲状态，无法开始录制");
+        return false;
+    }
+    
+    // 开始录制
+    bool success = servoRecorder.startRecording(fileName);
+    
+    if (success) {
+        Serial.print("开始录制舵机命令，录制文件：");
+        Serial.println(fileName);
+    }
+    
+    return success;
+}
+
+// 停止录制
+bool stopRecording() {
+    // 检查是否在录制状态
+    if (servoRecorder.getState() != STATE_RECORDING) {
+        Serial.println("错误：录制器当前不处于录制状态，无法停止录制");
+        return false;
+    }
+    
+    // 停止录制
+    bool success = servoRecorder.stopRecording();
+    
+    if (success) {
+        Serial.print("停止录制，共录制 ");
+        Serial.print(servoRecorder.getFrameCount());
+        Serial.println(" 帧命令");
+    }
+    
+    return success;
+}
+
+// 开始回放
+bool startPlayback(const char* fileName) {
+    // 检查是否已经在录制或回放中
+    if (servoRecorder.getState() != STATE_IDLE) {
+        Serial.println("错误：录制器当前不处于空闲状态，无法开始回放");
+        return false;
+    }
+    
+    // 开始回放
+    bool success = servoRecorder.startPlayback(fileName);
+    
+    if (success) {
+        Serial.print("开始回放舵机动作，文件：");
+        Serial.println(fileName);
+        
+        // 创建一个回放任务
+        xTaskCreatePinnedToCore(
+            playbackTask,                // 任务函数
+            "PlaybackTask",              // 任务名称
+            2048,                        // 堆栈大小
+            NULL,                        // 任务参数
+            2,                           // 任务优先级（与输入处理相同）
+            &playbackTaskHandle,         // 任务句柄指针
+            0                            // 在Core 0上运行
+        );
+    }
+    
+    return success;
+}
+
+// 停止回放
+void stopPlayback() {
+    // 检查是否在回放状态
+    if (servoRecorder.getState() != STATE_PLAYING) {
+        return;
+    }
+    
+    // 停止回放
+    servoRecorder.stopPlayback();
+    Serial.println("停止回放");
+    
+    // 如果回放任务存在，停止它
+    if (playbackTaskHandle != NULL) {
+        vTaskDelete(playbackTaskHandle);
+        playbackTaskHandle = NULL;
+    }
+}
+
+// 检查是否在录制中
+bool isRecording() {
+    return servoRecorder.getState() == STATE_RECORDING;
+}
+
+// 检查是否在回放中
+bool isPlaying() {
+    return servoRecorder.getState() == STATE_PLAYING;
+}
+
+// 获取已录制的帧数
+uint16_t getRecordFrameCount() {
+    return servoRecorder.getFrameCount();
+}
+
+// 列出所有录制文件
+void listRecordFiles(JsonArray& filesArray) {
+    servoRecorder.listRecordFiles(filesArray);
+}
+
+// 删除录制文件
+bool deleteRecordFile(const char* fileName) {
+    return servoRecorder.deleteRecordFile(fileName);
+}
+
+// 回放任务 - 负责按时间回放记录的命令
+void playbackTask(void* pvParameters) {
+    Serial.println("舵机命令回放任务启动");
+    
+    ServoCommand_t command;
+    
+    while (servoRecorder.getState() == STATE_PLAYING) {
+        // 获取下一帧命令
+        if (servoRecorder.playNextFrame(command)) {
+            // 发送命令到队列
+            xQueueSend(servoCommandQueue, &command, portMAX_DELAY);
+        }
+        
+        // 短暂让出CPU
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    
+    Serial.println("舵机命令回放任务结束");
+    
+    // 删除自身
+    playbackTaskHandle = NULL;
+    vTaskDelete(NULL);
 }

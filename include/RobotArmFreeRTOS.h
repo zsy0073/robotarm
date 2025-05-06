@@ -15,6 +15,18 @@
 #include "LobotServoController.h"
 #include "RobotArmConfig.h"
 #include "RobotArmCommon.h" // 使用共享头文件获取ServoCommandType和ServoCommand_t定义
+#include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
+
+// 在全局范围内声明录制相关函数，使它们在所有文件中可用
+extern bool startRecording(const char* fileName);
+extern bool stopRecording();
+extern bool startPlayback(const char* fileName);
+extern void stopPlayback();
+extern bool isRecording();
+extern bool isPlaying();
+extern uint16_t getRecordFrameCount();
+extern void listRecordFiles(JsonArray& filesArray);
+extern bool deleteRecordFile(const char* fileName);
 
 // 任务优先级定义
 #define SERVO_CONTROL_PRIORITY      (3)
@@ -58,5 +70,19 @@ uint16_t constrainServoPosition(uint8_t servoID, uint16_t position);
 
 // 获取当前舵机位置的函数 - 用于Web界面
 uint16_t getCurrentServoPosition(uint8_t servoID);
+
+// 舵机命令录制和回放控制函数
+bool startRecording(const char* fileName = DEFAULT_RECORD_FILE);
+bool stopRecording();
+bool startPlayback(const char* fileName = DEFAULT_RECORD_FILE);
+void stopPlayback();
+bool isRecording();
+bool isPlaying();
+uint16_t getRecordFrameCount();
+void listRecordFiles(JsonArray& filesArray);
+bool deleteRecordFile(const char* fileName);
+
+// 舵机命令回放任务
+void playbackTask(void* pvParameters);
 
 #endif // ROBOT_ARM_FREERTOS_H
