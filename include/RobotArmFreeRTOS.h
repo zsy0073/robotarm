@@ -36,7 +36,7 @@ extern bool deleteRecordFile(const char* fileName);
 
 // 任务栈大小定义
 #define SERVO_CONTROL_STACK_SIZE    (4096)
-#define INPUT_PROCESSING_STACK_SIZE (2048)
+#define INPUT_PROCESSING_STACK_SIZE (4096)  // 增加堆栈大小以处理运动学计算
 #define WEB_SERVER_STACK_SIZE       (8192)  // Web服务器需要更大的堆栈
 #define STATUS_MONITOR_STACK_SIZE   (2048)
 

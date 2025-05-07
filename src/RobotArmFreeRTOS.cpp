@@ -269,13 +269,29 @@ void inputProcessingTask(void *pvParameters) {
 // 处理PS2控制器输入 - 使用RobotArmController处理逻辑
 void processPS2Input() {
     // 使用RobotArmController处理PS2输入并生成舵机命令
-    ServoCommandType type;
+    ServoCommandType type = MOVE_SINGLE_SERVO; // 设置默认值避免未初始化
     uint8_t servoCount = 0;
     LobotServo servos[SERVO_COUNT];
     uint16_t time = 0;
     
+    // 使用try-catch结构保护运动学模式崩溃
+    bool hasCommand = false;
+    
     // 让RobotArmController处理输入并生成命令
-    bool hasCommand = armController.processPS2AndGenerateCommands(type, servoCount, servos, time);
+    try {
+        hasCommand = armController.processPS2AndGenerateCommands(type, servoCount, servos, time);
+    } catch (...) {
+        // 如果出现任何异常，回到安全模式
+        Serial.println("警告：处理PS2输入时发生错误，重置为关节角度模式");
+        
+        // 强制切换回关节角度模式
+        if(armController.getControlMode() != JOINT_ANGLE_MODE) {
+            armController.setControlMode(JOINT_ANGLE_MODE);
+        }
+        
+        // 不生成命令
+        hasCommand = false;
+    }
     
     // 有命令生成则发送到命令队列
     if (hasCommand) {
@@ -345,12 +361,22 @@ void processPS2Input() {
             while (xQueueReceive(servoCommandQueue, &dummyCommand, 0) == pdTRUE) {
                 // 清空队列
             }
+            
             // 然后发送复位命令
             xQueueSendToFront(servoCommandQueue, &command, portMAX_DELAY);
         } else {
             // 正常发送其他命令
             xQueueSend(servoCommandQueue, &command, portMAX_DELAY);
         }
+    }
+    
+    // 添加安全检查 - 确保ESP32不会崩溃
+    static unsigned long lastWatchdogReset = 0;
+    unsigned long currentTime = millis();
+    if (currentTime - lastWatchdogReset > 500) {
+        // 每500ms执行一次看门狗喂食
+        delay(1); // 短暂放弃CPU控制权，让其他任务运行
+        lastWatchdogReset = currentTime;
     }
 }
 

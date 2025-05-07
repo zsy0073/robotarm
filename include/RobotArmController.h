@@ -13,6 +13,13 @@
 #include "RobotArmConfig.h"
 #include "RobotArmCommon.h" // 使用共享头文件获取ServoCommandType等类型定义
 #include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
+#include "RobotKinematics.h" // 添加运动学模块头文件
+
+// 机械臂控制模式
+enum ArmControlMode {
+    JOINT_ANGLE_MODE,   // 关节角度控制模式（默认）
+    KINEMATICS_MODE     // 运动学控制模式
+};
 
 class RobotArmController {
 public:
@@ -57,6 +64,34 @@ public:
     
     // 移动舵机组
     void moveServos();
+
+    // 运动学模式相关方法
+    // 切换控制模式
+    void setControlMode(ArmControlMode mode);
+    
+    // 获取当前控制模式
+    ArmControlMode getControlMode() const { return controlMode; }
+    
+    // 运动学模式 - 设置末端执行器位姿
+    bool setEndEffectorPose(float x, float y, float z, float roll, float pitch, float yaw);
+    
+    // 运动学模式 - 获取当前末端执行器位姿
+    bool getEndEffectorPose(float& x, float& y, float& z, float& roll, float& pitch, float& yaw);
+    
+    // 运动学模式 - 增量式移动末端执行器
+    bool moveEndEffectorIncremental(float dx, float dy, float dz, float droll, float dpitch, float dyaw);
+    
+    // 运动学模式 - 舵机脉冲值转换为关节角度(弧度)
+    float pulseToJointAngle(uint8_t servoID, uint16_t pulse);
+    
+    // 运动学模式 - 关节角度(弧度)转换为舵机脉冲值
+    uint16_t jointAngleToPulse(uint8_t servoID, float angle);
+    
+    // 处理不同控制模式的输入
+    bool processJointAngleMode(ServoCommandType& type, uint8_t& servoCount, 
+                             LobotServo servos[], uint16_t& time);
+    bool processKinematicsMode(ServoCommandType& type, uint8_t& servoCount, 
+                             LobotServo servos[], uint16_t& time);
     
 private:
     // PS2控制器对象
@@ -101,7 +136,19 @@ private:
     void initRobotArm();
     int calculateServoSpeed(int stickValue, int servoIndex);
     void updateServoDirections();
-
+    
+    // 运动学模块相关
+    RobotKinematics kinematics;       // 运动学计算对象
+    ArmControlMode controlMode;       // 当前控制模式
+    float currentJointAngles[ARM_DOF]; // 当前关节角度(弧度)
+    float endEffectorPose[6];         // 当前末端位姿[x,y,z,roll,pitch,yaw]
+    
+    // 同步关节角度和舵机位置
+    void syncJointAnglesToServos();
+    void syncServosToJointAngles();
+    
+    // 更新末端执行器位姿
+    void updateEndEffectorPose();
 };
 
 #endif // ROBOT_ARM_CONTROLLER_H

@@ -11,7 +11,8 @@
 RobotArmController::RobotArmController() : 
     controller(Serial),
     useCustomLimits(USE_CUSTOM_LIMITS),
-    lastUpdateTime(0)
+    lastUpdateTime(0),
+    controlMode(JOINT_ANGLE_MODE)  // 默认使用关节角度控制模式
 {
     // 初始化当前舵机位置数组
     currentPosition[0] = HOME_BASE;
@@ -26,6 +27,16 @@ RobotArmController::RobotArmController() :
     // 初始化舵机速度控制数组
     for (int i = 0; i < 8; i++) {
         servoSpeedControl[i] = 0;
+    }
+    
+    // 初始化末端位姿
+    for (int i = 0; i < 6; i++) {
+        endEffectorPose[i] = 0.0f;
+    }
+    
+    // 初始化关节角度
+    for (int i = 0; i < ARM_DOF; i++) {
+        currentJointAngles[i] = 0.0f;
     }
 }
 
@@ -117,6 +128,21 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
     // 读取PS2手柄状态 - 使用false参数禁用震动
     ps2x.read_gamepad(false, false);
     
+    // 检测Select按钮按下，用于切换控制模式
+    bool selectPressed = ps2x.ButtonPressed(PSB_SELECT);
+    if (selectPressed) {
+        // 切换控制模式
+        ArmControlMode newMode = (controlMode == JOINT_ANGLE_MODE) ? 
+                                KINEMATICS_MODE : JOINT_ANGLE_MODE;
+        setControlMode(newMode);
+        
+        // 输出当前模式
+        Serial.print("控制模式已切换为: ");
+        Serial.println((newMode == JOINT_ANGLE_MODE) ? "关节角度模式" : "运动学模式");
+        
+        return false; // 不生成舵机命令
+    }
+    
     // 检测三角键是否按下，用于机械臂复位
     bool trianglePressed = ps2x.ButtonPressed(PSB_TRIANGLE);
     
@@ -168,11 +194,30 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
         // 立即复位到初始位置，更新当前状态
         moveToInitialPosition();
         
+        // 如果在运动学模式，还需要同步关节角度和更新末端位姿
+        if (controlMode == KINEMATICS_MODE) {
+            syncServosToJointAngles();
+            updateEndEffectorPose();
+        }
+        
         // 输出复位命令信息
         Serial.println("舵机组命令：复位到初始位置");
         return true;
     }
     
+    // 基于当前控制模式处理输入
+    if (controlMode == KINEMATICS_MODE) {
+        // 运动学模式下的控制逻辑
+        return processKinematicsMode(type, servoCount, servos, time);
+    } else {
+        // 关节角度模式下的控制逻辑
+        return processJointAngleMode(type, servoCount, servos, time);
+    }
+}
+
+// 处理关节角度控制模式下的PS2输入
+bool RobotArmController::processJointAngleMode(ServoCommandType& type, uint8_t& servoCount, 
+                                             LobotServo servos[], uint16_t& time) {
     // 摇杆死区设置
     const int STICK_DEADZONE = 15;  
     
@@ -192,6 +237,7 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
     const int FIXED_INCREMENT = 5; // 固定增量值
     const int SERVO_PULSE_DELTA = DEGREE_TO_PULSE(2.4); // 与SERVO_PULSE_SPEED相同的增量
     
+    // 根据摇杆方向确定移动增量
     int baseIncrement = (lx == 0) ? 0 : ((lx > 0) ? FIXED_INCREMENT : -FIXED_INCREMENT);
     int shoulderIncrement = (ly == 0) ? 0 : ((ly > 0) ? -FIXED_INCREMENT : FIXED_INCREMENT); // 反转方向
     int elbowIncrement = (ry == 0) ? 0 : ((ry > 0) ? -FIXED_INCREMENT : FIXED_INCREMENT);    // 反转方向
@@ -352,6 +398,145 @@ bool RobotArmController::processPS2AndGenerateCommands(ServoCommandType& type, u
         Serial.println("]");
         
         return true;
+    }
+    
+    return false; // 没有生成新的命令
+}
+
+// 处理运动学控制模式下的PS2输入
+bool RobotArmController::processKinematicsMode(ServoCommandType& type, uint8_t& servoCount, 
+                                             LobotServo servos[], uint16_t& time) {
+    // 摇杆死区设置
+    const int STICK_DEADZONE = 15;  
+    
+    // 读取摇杆值
+    int lx = ps2x.Analog(PSS_LX) - 128;  // 范围-127到127
+    int ly = ps2x.Analog(PSS_LY) - 128;  // 范围-127到127
+    int rx = ps2x.Analog(PSS_RX) - 128;  // 范围-127到127
+    int ry = ps2x.Analog(PSS_RY) - 128;  // 范围-127到127
+    
+    // 死区检查
+    if (abs(lx) < STICK_DEADZONE) lx = 0;
+    if (abs(ly) < STICK_DEADZONE) ly = 0;
+    if (abs(rx) < STICK_DEADZONE) rx = 0;
+    if (abs(ry) < STICK_DEADZONE) ry = 0;
+    
+    // 运动学控制的增量系数 (米/弧度)
+    const float POS_INCREMENT = 0.005f; // 位置增量，每次移动5mm
+    const float ANG_INCREMENT = 0.05f; // 角度增量，每次约3度
+    
+    // 读取方向键和L2/R2状态
+    bool padUp = ps2x.Button(PSB_PAD_UP);
+    bool padDown = ps2x.Button(PSB_PAD_DOWN);
+    bool padLeft = ps2x.Button(PSB_PAD_LEFT);
+    bool padRight = ps2x.Button(PSB_PAD_RIGHT);
+    bool l1Pressed = ps2x.Button(PSB_L1);
+    bool l2Pressed = ps2x.Button(PSB_L2);
+    bool r1Pressed = ps2x.Button(PSB_R1);
+    bool r2Pressed = ps2x.Button(PSB_R2);
+    
+    // 位置增量值
+    float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+    float droll = 0.0f, dpitch = 0.0f, dyaw = 0.0f;
+    bool hasMovement = false;
+    
+    // 1. 左摇杆控制末端XY位置
+    if (lx != 0) {
+        dx = (lx > 0) ? POS_INCREMENT : -POS_INCREMENT;
+        hasMovement = true;
+    }
+    
+    if (ly != 0) {
+        dy = (ly > 0) ? -POS_INCREMENT : POS_INCREMENT; // 反转Y轴方向
+        hasMovement = true;
+    }
+    
+    // 2. 上下方向键控制Z轴高度
+    if (padUp) {
+        dz = POS_INCREMENT;
+        hasMovement = true;
+    }
+    else if (padDown) {
+        dz = -POS_INCREMENT;
+        hasMovement = true;
+    }
+    
+    // 3. 右摇杆控制末端Roll和Pitch角度
+    if (rx != 0) {
+        droll = (rx > 0) ? ANG_INCREMENT : -ANG_INCREMENT;
+        hasMovement = true;
+    }
+    
+    if (ry != 0) {
+        dpitch = (ry > 0) ? -ANG_INCREMENT : ANG_INCREMENT; // 反转俯仰方向
+        hasMovement = true;
+    }
+    
+    // 4. 左右方向键控制末端Yaw角度
+    if (padLeft) {
+        dyaw = ANG_INCREMENT;
+        hasMovement = true;
+    }
+    else if (padRight) {
+        dyaw = -ANG_INCREMENT;
+        hasMovement = true;
+    }
+    
+    // 5. R1/R2控制夹爪
+    if (r1Pressed) {
+        // 夹爪控制保持原样，不使用运动学
+        uint16_t position = constrainServoAngle(GRIPPER_SERVO_ID, 
+                                            currentPosition[GRIPPER_SERVO_ID - 1] + 
+                                            5 * servoDirections[GRIPPER_SERVO_ID - 1]);
+        servos[0].ID = GRIPPER_SERVO_ID;
+        servos[0].Position = position;
+        servoCount = 1;
+        time = 20;
+        type = MOVE_SINGLE_SERVO;
+        
+        // 更新当前夹爪位置
+        currentPosition[GRIPPER_SERVO_ID - 1] = position;
+        
+        return true;
+    }
+    else if (r2Pressed) {
+        // 夹爪控制保持原样，不使用运动学
+        uint16_t position = constrainServoAngle(GRIPPER_SERVO_ID, 
+                                            currentPosition[GRIPPER_SERVO_ID - 1] - 
+                                            5 * servoDirections[GRIPPER_SERVO_ID - 1]);
+        servos[0].ID = GRIPPER_SERVO_ID;
+        servos[0].Position = position;
+        servoCount = 1;
+        time = 20;
+        type = MOVE_SINGLE_SERVO;
+        
+        // 更新当前夹爪位置
+        currentPosition[GRIPPER_SERVO_ID - 1] = position;
+        
+        return true;
+    }
+    
+    // 如果有移动，则应用增量
+    if (hasMovement) {
+        // 执行增量运动学控制
+        bool success = moveEndEffectorIncremental(dx, dy, dz, droll, dpitch, dyaw);
+        
+        if (success) {
+            // 准备舵机命令
+            for (int i = 0; i < ARM_DOF; i++) {
+                servos[i].ID = i + 1;
+                servos[i].Position = currentPosition[i];
+            }
+            servoCount = ARM_DOF;
+            time = 20; // 快速响应
+            type = MOVE_ALL_SERVOS;
+            
+            Serial.println("运动学控制：末端增量移动成功");
+            return true;
+        } else {
+            Serial.println("运动学控制：末端增量移动失败，可能超出工作空间范围");
+            return false;
+        }
     }
     
     return false; // 没有生成新的命令
@@ -671,5 +856,353 @@ void RobotArmController::moveServos() {
             // 发送舵机组控制命令
             controller.moveServos(servos, servoCount, SERVO_UPDATE_INTERVAL);
         }
+    }
+}
+
+// 切换控制模式
+void RobotArmController::setControlMode(ArmControlMode mode) {
+    // 切换控制模式前先同步数据
+    if (controlMode != mode) {
+        if (mode == KINEMATICS_MODE) {
+            // 从关节角度模式切换到运动学模式
+            Serial.println("正在初始化运动学模式...");
+            
+            // 首先移动到一个安全的非奇异姿态
+            LobotServo servos[8];
+            
+            // 设置一个安全的非奇异姿态 - 机械臂处于"准备"位置
+            // 底座居中，肩部略抬，肘部弯曲，腕部自然伸展
+            servos[0].ID = BASE_SERVO_ID;
+            servos[0].Position = HOME_BASE;  // 底座居中 (120°)
+            
+            servos[1].ID = SHOULDER_PITCH_ID;
+            servos[1].Position = DEGREE_TO_PULSE(80);  // 肩部抬起 (80°)
+            
+            servos[2].ID = SHOULDER_ROLL_ID;
+            servos[2].Position = HOME_SHOULDER;  // 肩部滚转居中 (120°)
+            
+            servos[3].ID = ELBOW_SERVO_ID;
+            servos[3].Position = DEGREE_TO_PULSE(100);  // 肘部微弯 (100°)
+            
+            servos[4].ID = WRIST_PITCH_ID;
+            servos[4].Position = DEGREE_TO_PULSE(110);  // 腕部略下倾 (110°)
+            
+            servos[5].ID = WRIST_ROLL_ID;
+            servos[5].Position = HOME_WRIST_ROLL;  // 腕部滚转居中 (120°)
+            
+            servos[6].ID = WRIST_YAW_ID;
+            servos[6].Position = HOME_WRIST_YAW;  // 腕部偏航居中 (120°)
+            
+            servos[7].ID = GRIPPER_SERVO_ID;
+            servos[7].Position = HOME_GRIPPER;  // 夹爪保持初始状态
+            
+            // 移动到安全姿态
+            controller.moveServos(servos, 8, 1000);
+            delay(1000);  // 等待移动完成
+            
+            // 更新当前舵机位置
+            for (int i = 0; i < 8; i++) {
+                currentPosition[i] = servos[i].Position;
+            }
+            
+            // 然后初始化关节角度数组
+            for (int i = 0; i < ARM_DOF && i < 8; i++) {
+                if (i < 7) {  // 确保在有效范围内
+                    uint8_t servoID = i + 1;
+                    currentJointAngles[i] = pulseToJointAngle(servoID, currentPosition[i]);
+                }
+            }
+            
+            // 执行正运动学计算初始末端位姿
+            float T[4][4];
+            bool fkSuccess = kinematics.forwardKinematics(currentJointAngles, T);
+            
+            if (fkSuccess) {
+                // 从变换矩阵中提取位置和欧拉角
+                float position[3];
+                float euler[3];
+                kinematics.matrixToEuler(T, position, euler);
+                
+                // 更新末端位姿
+                endEffectorPose[0] = position[0];  // X
+                endEffectorPose[1] = position[1];  // Y
+                endEffectorPose[2] = position[2];  // Z
+                endEffectorPose[3] = euler[2];     // Roll
+                endEffectorPose[4] = euler[1];     // Pitch
+                endEffectorPose[5] = euler[0];     // Yaw
+                
+                Serial.println("末端位姿已成功计算:");
+                Serial.print("位置: [");
+                Serial.print(position[0], 3); Serial.print(", ");
+                Serial.print(position[1], 3); Serial.print(", ");
+                Serial.print(position[2], 3); Serial.println("]");
+                Serial.print("姿态(rad): [");
+                Serial.print(euler[2], 3); Serial.print(", ");
+                Serial.print(euler[1], 3); Serial.print(", ");
+                Serial.print(euler[0], 3); Serial.println("]");
+            } else {
+                // 如果正运动学计算失败，使用默认值
+                Serial.println("正运动学计算失败，使用默认末端位姿");
+                endEffectorPose[0] = 0.20f;  // X = 20cm
+                endEffectorPose[1] = 0.0f;   // Y = 0
+                endEffectorPose[2] = 0.25f;  // Z = 25cm
+                endEffectorPose[3] = 0.0f;   // Roll = 0
+                endEffectorPose[4] = 0.0f;   // Pitch = 0
+                endEffectorPose[5] = 0.0f;   // Yaw = 0
+            }
+            
+            Serial.println("已切换到运动学控制模式");
+        } else {
+            // 从运动学模式切换到关节角度模式
+            // 无需额外处理，直接切换即可
+            Serial.println("已切换到关节角度控制模式");
+        }
+        
+        controlMode = mode;
+    }
+}
+
+// 运动学模式 - 设置末端执行器位姿
+bool RobotArmController::setEndEffectorPose(float x, float y, float z, float roll, float pitch, float yaw) {
+    if (controlMode != KINEMATICS_MODE) {
+        setControlMode(KINEMATICS_MODE);
+    }
+    
+    // 保存目标位姿
+    float targetPose[6] = {x, y, z, roll, pitch, yaw};
+    
+    // 创建目标位姿矩阵
+    float T_target[4][4];
+    kinematics.eulerToMatrix(x, y, z, roll, pitch, yaw, T_target);
+    
+    // 使用当前关节角度作为初始解
+    float q_result[ARM_DOF];
+    
+    // 尝试求解逆运动学
+    bool success = kinematics.inverseKinematics(T_target, currentJointAngles, q_result);
+    
+    if (success) {
+        // 更新关节角度
+        for (int i = 0; i < ARM_DOF; i++) {
+            currentJointAngles[i] = q_result[i];
+        }
+        
+        // 更新末端位姿
+        for (int i = 0; i < 6; i++) {
+            endEffectorPose[i] = targetPose[i];
+        }
+        
+        // 将关节角度转换为舵机脉冲值并应用
+        syncJointAnglesToServos();
+        
+        // 输出结果
+        Serial.println("末端位姿设置成功");
+        Serial.print("位置: [");
+        Serial.print(x, 3); Serial.print(", ");
+        Serial.print(y, 3); Serial.print(", ");
+        Serial.print(z, 3); Serial.println("]");
+        Serial.print("姿态(rad): [");
+        Serial.print(roll, 3); Serial.print(", ");
+        Serial.print(pitch, 3); Serial.print(", ");
+        Serial.print(yaw, 3); Serial.println("]");
+        
+        return true;
+    } else {
+        Serial.println("末端位姿设置失败：逆运动学求解错误");
+        Serial.print("逆解迭代次数: "); Serial.println(kinematics.getLastIterCount());
+        Serial.print("最终误差: "); Serial.println(kinematics.getLastError(), 6);
+        return false;
+    }
+}
+
+// 运动学模式 - 获取当前末端执行器位姿
+bool RobotArmController::getEndEffectorPose(float& x, float& y, float& z, float& roll, float& pitch, float& yaw) {
+    if (controlMode != KINEMATICS_MODE) {
+        // 如果不在运动学模式，先切换模式
+        setControlMode(KINEMATICS_MODE);
+    }
+    
+    // 返回当前末端位姿
+    x = endEffectorPose[0];
+    y = endEffectorPose[1];
+    z = endEffectorPose[2];
+    roll = endEffectorPose[3];
+    pitch = endEffectorPose[4];
+    yaw = endEffectorPose[5];
+    
+    return true;
+}
+
+// 运动学模式 - 增量式移动末端执行器
+bool RobotArmController::moveEndEffectorIncremental(float dx, float dy, float dz, float droll, float dpitch, float dyaw) {
+    if (controlMode != KINEMATICS_MODE) {
+        setControlMode(KINEMATICS_MODE);
+    }
+    
+    // 获取当前位姿
+    float x = endEffectorPose[0];
+    float y = endEffectorPose[1];
+    float z = endEffectorPose[2];
+    float roll = endEffectorPose[3];
+    float pitch = endEffectorPose[4];
+    float yaw = endEffectorPose[5];
+    
+    // 应用增量
+    x += dx;
+    y += dy;
+    z += dz;
+    roll += droll;
+    pitch += dpitch;
+    yaw += dyaw;
+    
+    // 设置新的位姿
+    return setEndEffectorPose(x, y, z, roll, pitch, yaw);
+}
+
+// 运动学模式 - 舵机脉冲值转换为关节角度(弧度)
+float RobotArmController::pulseToJointAngle(uint8_t servoID, uint16_t pulse) {
+    // 舵机脉冲值范围: 0-1000 对应 0-240度
+    float degreeAngle = PULSE_TO_DEGREE(pulse);
+    
+    // 不同关节可能有不同的零位和旋转方向
+    switch(servoID) {
+        case BASE_SERVO_ID: // 底座旋转关节
+            // 将0-240度映射到-PI到+PI (假设中间位置120度对应0弧度)
+            return (degreeAngle - 120.0f) * PI / 180.0f;
+            
+        case SHOULDER_PITCH_ID: // 肩部俯仰关节
+            // 将0-240度映射到适当的范围
+            return (120.0f - degreeAngle) * PI / 180.0f; // 反转方向
+            
+        case SHOULDER_ROLL_ID: // 肩部滚转关节
+            return (degreeAngle - 120.0f) * PI / 180.0f;
+            
+        case ELBOW_SERVO_ID: // 肘部关节
+            return (120.0f - degreeAngle) * PI / 180.0f; // 反转方向
+            
+        case WRIST_PITCH_ID: // 腕部俯仰关节
+            return (120.0f - degreeAngle) * PI / 180.0f; // 反转方向
+            
+        case WRIST_ROLL_ID: // 腕部滚转关节
+            return (degreeAngle - 120.0f) * PI / 180.0f;
+            
+        case WRIST_YAW_ID: // 腕部偏航关节
+            return (degreeAngle - 120.0f) * PI / 180.0f;
+            
+        default: // 夹爪或其他关节
+            return (degreeAngle - 120.0f) * PI / 180.0f;
+    }
+}
+
+// 运动学模式 - 关节角度(弧度)转换为舵机脉冲值
+uint16_t RobotArmController::jointAngleToPulse(uint8_t servoID, float angle) {
+    float degreeAngle;
+    
+    // 将弧度转换为角度，并考虑不同关节的零位和方向
+    switch(servoID) {
+        case BASE_SERVO_ID: // 底座旋转关节
+            // 将-PI到+PI映射回0-240度
+            degreeAngle = angle * 180.0f / PI + 120.0f;
+            break;
+            
+        case SHOULDER_PITCH_ID: // 肩部俯仰关节
+            degreeAngle = 120.0f - angle * 180.0f / PI; // 反转方向
+            break;
+            
+        case SHOULDER_ROLL_ID: // 肩部滚转关节
+            degreeAngle = angle * 180.0f / PI + 120.0f;
+            break;
+            
+        case ELBOW_SERVO_ID: // 肘部关节
+            degreeAngle = 120.0f - angle * 180.0f / PI; // 反转方向
+            break;
+            
+        case WRIST_PITCH_ID: // 腕部俯仰关节
+            degreeAngle = 120.0f - angle * 180.0f / PI; // 反转方向
+            break;
+            
+        case WRIST_ROLL_ID: // 腕部滚转关节
+            degreeAngle = angle * 180.0f / PI + 120.0f;
+            break;
+            
+        case WRIST_YAW_ID: // 腕部偏航关节
+            degreeAngle = angle * 180.0f / PI + 120.0f;
+            break;
+            
+        default: // 夹爪或其他关节
+            degreeAngle = angle * 180.0f / PI + 120.0f;
+            break;
+    }
+    
+    // 限制角度范围在0-240度内
+    degreeAngle = constrain(degreeAngle, 0.0f, 240.0f);
+    
+    // 转换为脉冲值
+    uint16_t pulse = DEGREE_TO_PULSE(degreeAngle);
+    
+    // 确保脉冲值在有效范围内
+    return constrain(pulse, 0, 1000);
+}
+
+// 同步关节角度和舵机位置
+void RobotArmController::syncJointAnglesToServos() {
+    LobotServo servos[ARM_DOF];
+    
+    // 将关节角度转换为舵机脉冲值
+    for (int i = 0; i < ARM_DOF; i++) {
+        uint8_t servoID = i + 1;
+        uint16_t pulse = jointAngleToPulse(servoID, currentJointAngles[i]);
+        
+        // 设置舵机位置
+        currentPosition[i] = pulse;
+        servos[i].ID = servoID;
+        servos[i].Position = pulse;
+    }
+    
+    // 移动所有舵机
+    controller.moveServos(servos, ARM_DOF, 100);
+    
+    Serial.println("已同步关节角度到舵机位置");
+}
+
+void RobotArmController::syncServosToJointAngles() {
+    // 将当前舵机脉冲值转换为关节角度
+    for (int i = 0; i < ARM_DOF; i++) {
+        uint8_t servoID = i + 1;
+        currentJointAngles[i] = pulseToJointAngle(servoID, currentPosition[i]);
+    }
+    
+    Serial.println("已同步舵机位置到关节角度");
+}
+
+// 更新末端执行器位姿
+void RobotArmController::updateEndEffectorPose() {
+    // 使用正运动学计算末端位姿
+    float T[4][4];
+    if (kinematics.forwardKinematics(currentJointAngles, T)) {
+        // 提取位置和欧拉角
+        float position[3];
+        float euler[3];
+        kinematics.matrixToEuler(T, position, euler);
+        
+        // 更新末端位姿
+        endEffectorPose[0] = position[0];
+        endEffectorPose[1] = position[1];
+        endEffectorPose[2] = position[2];
+        endEffectorPose[3] = euler[2]; // roll
+        endEffectorPose[4] = euler[1]; // pitch
+        endEffectorPose[5] = euler[0]; // yaw
+        
+        Serial.println("末端位姿已更新");
+        Serial.print("位置: [");
+        Serial.print(position[0], 3); Serial.print(", ");
+        Serial.print(position[1], 3); Serial.print(", ");
+        Serial.print(position[2], 3); Serial.println("]");
+        Serial.print("姿态(rad): [");
+        Serial.print(euler[2], 3); Serial.print(", ");
+        Serial.print(euler[1], 3); Serial.print(", ");
+        Serial.print(euler[0], 3); Serial.println("]");
+    } else {
+        Serial.println("末端位姿更新失败：正运动学计算错误");
     }
 }
