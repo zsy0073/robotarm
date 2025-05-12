@@ -132,8 +132,7 @@ bool RobotKinematics::inverseKinematics(const float T_des[4][4], const float* q0
     float q[ARM_DOF];
     float best_q[ARM_DOF];
     float min_error = 1e6f; // 足够大的初始值
-    int stalled_count = 0;
-    float last_error = INFINITY;
+    int actual_iterations = 0;
     
     // 复制初始关节角度
     for(int i = 0; i < ARM_DOF; i++) {
@@ -141,196 +140,391 @@ bool RobotKinematics::inverseKinematics(const float T_des[4][4], const float* q0
         best_q[i] = q0[i];
     }
     
-    // 迭代求解
-    bool success = false;
-    for(int iter = 0; iter < _max_iter; iter++) {
-        // 计算当前位姿
-        float T_current[4][4];
-        if(!forwardKinematics(q, T_current)) {
-            _last_iter_count = iter;
-            _last_error = min_error;
-            return false;
+    // 计算初始位姿和误差
+    float T_initial[4][4];
+    forwardKinematics(q, T_initial);
+    float initial_error[6];
+    computeFullError(T_initial, T_des, initial_error);
+    float initial_error_norm = vectorNorm(initial_error, 6);
+    min_error = initial_error_norm;
+    
+    // 记录初始位置
+    float initial_position[3];
+    for(int i = 0; i < 3; i++) {
+        initial_position[i] = T_initial[i][3];
+    }
+    
+    // 记录目标位置
+    float target_position[3];
+    for(int i = 0; i < 3; i++) {
+        target_position[i] = T_des[i][3];
+    }
+    
+    // 计算位置差距
+    float position_diff = 0;
+    for(int i = 0; i < 3; i++) {
+        position_diff += (target_position[i] - initial_position[i]) * 
+                         (target_position[i] - initial_position[i]);
+    }
+    position_diff = sqrt(position_diff);
+    
+    // 根据位置差距自适应设置参数
+    float target_tolerance;
+    int min_iterations, max_iterations;
+    
+    if(position_diff < 0.01f) {
+        // 微小位移，可以更快收敛
+        target_tolerance = 0.01f;
+        min_iterations = 5;
+        max_iterations = 50;
+    } else if(position_diff < 0.05f) {
+        // 小位移
+        target_tolerance = 0.01f;
+        min_iterations = 10;
+        max_iterations = 100;
+    } else {
+        // 大位移，需要更多迭代
+        target_tolerance = 0.02f;
+        min_iterations = 20;
+        max_iterations = 200;
+    }
+    
+    // 如果初始误差已经足够小，可以直接返回
+    if(initial_error_norm < target_tolerance && position_diff < 0.01f) {
+        for(int i = 0; i < ARM_DOF; i++) {
+            q_result[i] = q0[i];
         }
-        
-        // 计算误差
-        float error[6]; // [位置误差(3); 姿态误差(3)]
-        computeFullError(T_current, T_des, error);
-        float error_norm = vectorNorm(error, 6);
-        
-        // 记录最佳解
-        if(error_norm < min_error) {
-            min_error = error_norm;
-            for(int i = 0; i < ARM_DOF; i++) {
-                best_q[i] = q[i];
-            }
-            stalled_count = 0;  // 重置停滞计数
+        _last_iter_count = 1;
+        _last_error = initial_error_norm;
+        return true;
+    }
+    
+    // 优化起点策略 - 根据位置差异决定起点数量
+    int num_starting_points;
+    if(position_diff < 0.02f) {
+        num_starting_points = 2;  // 小位移只需少量起点
+    } else if(position_diff < 0.1f) {
+        num_starting_points = 3;  // 中等位移
+    } else {
+        num_starting_points = 5;  // 大位移需要更多尝试
+    }
+    
+    float best_error_overall = min_error;
+    float q_starts[5][ARM_DOF]; // 最多5个起点
+    
+    // 权重系数，使末端位置误差比姿态误差更重要
+    float position_weight = 1.0f; 
+    float orientation_weight = 0.5f;
+    
+    // 准备多个起点
+    for(int i = 0; i < ARM_DOF; i++) {
+        q_starts[0][i] = q0[i];  // 原始起点
+    }
+    
+    // 添加额外起点，使用预设偏移模式而不是完全随机
+    const float offset_patterns[4][ARM_DOF] = {
+        {0.2f, -0.2f, 0.2f, -0.2f, 0.2f, -0.2f, 0.0f},
+        {-0.2f, 0.2f, -0.2f, 0.2f, -0.2f, 0.2f, 0.0f},
+        {0.3f, 0.3f, -0.3f, -0.3f, 0.3f, 0.3f, 0.0f},
+        {-0.3f, -0.3f, 0.3f, 0.3f, -0.3f, -0.3f, 0.0f}
+    };
+    
+    for(int sp = 1; sp < num_starting_points && sp <= 4; sp++) {
+        for(int i = 0; i < ARM_DOF; i++) {
+            // 使用预设偏移模式
+            q_starts[sp][i] = q0[i] + offset_patterns[sp-1][i];
             
-            // 如果达到精度要求，提前结束
-            if(error_norm < _tol) {
-                for(int i = 0; i < ARM_DOF; i++) {
-                    q_result[i] = q[i];
-                }
-                success = true;
-                _last_iter_count = iter + 1;
-                _last_error = error_norm;
-                break;
-            }
-        } else {
-            stalled_count++;  // 误差没有改善
+            // 添加少量随机扰动
+            q_starts[sp][i] += (random(1000) / 10000.0f - 0.05f);
         }
         
-        // 早期终止条件: 误差已经足够小且迭代次数足够多
-        if(error_norm < 0.01f && iter > _max_iter/4) {
+        // 应用关节限制
+        if(_use_joint_limits) {
             for(int i = 0; i < ARM_DOF; i++) {
-                q_result[i] = best_q[i];
+                if(q_starts[sp][i] < _joint_lower[i]) 
+                    q_starts[sp][i] = _joint_lower[i];
+                else if(q_starts[sp][i] > _joint_upper[i]) 
+                    q_starts[sp][i] = _joint_upper[i];
             }
-            success = true;
-            _last_iter_count = iter + 1;
-            _last_error = min_error;
+        }
+    }
+    
+    bool found_good_solution = false;
+    
+    // 从多个起点尝试求解
+    for(int sp = 0; sp < num_starting_points && sp < 5; sp++) {
+        // 如果已经找到非常好的解，提前终止
+        if(best_error_overall < 0.005f) {
+            found_good_solution = true;
             break;
         }
         
-        // 随机扰动策略
-        if(stalled_count > 10) {
-            // 创建随机扰动
-            for(int i = 0; i < ARM_DOF; i++) {
-                float perturb = (random(2000) / 2000.0f - 0.5f) * 0.2f;
-                q[i] += perturb;
-            }
-            
-            // 应用关节限位
-            if(_use_joint_limits) {
-                applyJointLimits(q);
-            }
-            
-            stalled_count = 0;
-            continue;
-        }
-        
-        // 计算雅可比矩阵
-        float J[6][ARM_DOF];
-        getJacobian(q, J);
-        
-        // 自适应阻尼策略
-        float damping = _damping;
-        float cond_J = approximateConditionNumber(J);
-        if(cond_J > 1e4) {  // 条件数过大，增大阻尼
-            damping = _damping * 10.0f;
-        } else {
-            // 在误差大时使用大阻尼，误差小时减小阻尼
-            damping = _damping * (1.0f + _damping_factor * min(1.0f, error_norm));
-        }
-        
-        // 计算阻尼伪逆
-        float J_pinv[ARM_DOF][6];
-        pseudoInverse(J, J_pinv);
-        
-        // 计算关节角度增量
-        float dq[ARM_DOF] = {0};
+        // 重置当前点
         for(int i = 0; i < ARM_DOF; i++) {
-            dq[i] = 0.0f;
-            for(int j = 0; j < 6; j++) {
-                dq[i] += J_pinv[i][j] * error[j];
-            }
+            q[i] = q_starts[sp][i];
         }
         
-        // 自适应步长控制
-        float alpha;
-        if(error_norm > 1.0f) {
-            alpha = 0.1f;  // 误差大时，使用小步长
-        } else if(error_norm > 0.5f) {
-            alpha = 0.2f;
-        } else if(error_norm > 0.2f) {
-            alpha = 0.5f;
-        } else {
-            alpha = 1.0f;  // 误差小时，可以使用全步长
-        }
+        int stalled_count = 0;
+        float last_error = INFINITY;
+        float current_min_error = INFINITY;
         
-        // 线搜索 - 最多尝试4次
-        bool step_accepted = false;
-        float current_error = error_norm;
-        
-        for(int ls = 0; ls < 4 && !step_accepted; ls++) {
-            // 尝试新的关节角
-            float q_new[ARM_DOF];
-            for(int i = 0; i < ARM_DOF; i++) {
-                q_new[i] = q[i] + alpha * dq[i];
+        // 主迭代过程
+        for(int iter = 0; iter < max_iterations; iter++) {
+            actual_iterations++;
+            
+            // 计算当前位姿
+            float T_current[4][4];
+            if(!forwardKinematics(q, T_current)) {
+                continue;
             }
             
-            // 应用关节限位
-            if(_use_joint_limits) {
-                for(int i = 0; i < ARM_DOF; i++) {
-                    if(q_new[i] < _joint_lower[i]) q_new[i] = _joint_lower[i];
-                    else if(q_new[i] > _joint_upper[i]) q_new[i] = _joint_upper[i];
-                }
+            // 计算误差向量 [位置误差(3); 姿态误差(3)]
+            float error[6];
+            computeFullError(T_current, T_des, error);
+            
+            // 分别计算位置和姿态误差
+            float pos_error = sqrt(error[0]*error[0] + error[1]*error[1] + error[2]*error[2]);
+            float ori_error = sqrt(error[3]*error[3] + error[4]*error[4] + error[5]*error[5]);
+            
+            // 应用权重
+            for(int i = 0; i < 3; i++) {
+                error[i] *= position_weight;
+            }
+            for(int i = 3; i < 6; i++) {
+                error[i] *= orientation_weight;
             }
             
-            // 计算新位姿和误差
-            float T_new[4][4];
-            forwardKinematics(q_new, T_new);
+            // 计算加权总误差
+            float error_norm = vectorNorm(error, 6);
             
-            float error_new[6];
-            computeFullError(T_new, T_des, error_new);
-            float new_error = vectorNorm(error_new, 6);
-            
-            // 接受误差减小的步长
-            if(new_error < current_error) {
-                for(int i = 0; i < ARM_DOF; i++) {
-                    q[i] = q_new[i];
-                }
-                step_accepted = true;
-                break;
-            }
-            
-            // 减小步长继续尝试
-            alpha *= 0.5f;
-        }
-        
-        // 如果线搜索失败，使用更小的步长
-        if(!step_accepted) {
-            float fixed_alpha = 0.005f;
-            for(int i = 0; i < ARM_DOF; i++) {
-                q[i] += fixed_alpha * dq[i];
-            }
-            
-            // 应用关节限位
-            if(_use_joint_limits) {
-                applyJointLimits(q);
-            }
-        }
-        
-        // 检测是否停滞
-        if(iter > 1 && iter % 20 == 0) {
-            if(abs(last_error - error_norm) < 0.001f) {
-                // 误差几乎不变，尝试随机重启
-                if(min_error > 0.1f && iter < _max_iter * 0.8f) {
-                    // 如果当前最佳解不够好，尝试重新开始
+            // 更新最佳解
+            if(error_norm < current_min_error) {
+                current_min_error = error_norm;
+                
+                // 只有当这个起点找到的解比全局最优更好时才更新全局最优
+                if(error_norm < best_error_overall) {
+                    best_error_overall = error_norm;
                     for(int i = 0; i < ARM_DOF; i++) {
-                        q[i] = q0[i] + (random(2000) / 2000.0f - 0.5f) * 0.5f;
+                        best_q[i] = q[i];
                     }
-                    if(_use_joint_limits) {
-                        applyJointLimits(q);
+                }
+                
+                stalled_count = 0;  // 重置停滞计数
+                
+                // 如果达到精度要求并且已完成最小迭代次数，提前结束
+                if(pos_error < target_tolerance && iter >= min_iterations) {
+                    found_good_solution = true;
+                    break;
+                }
+            } else {
+                stalled_count++;
+            }
+            
+            // 如果多次停滞，尝试随机扰动
+            if(stalled_count > 8) {
+                for(int i = 0; i < ARM_DOF; i++) {
+                    float perturb = (random(1000) / 1000.0f - 0.5f) * 0.1f;
+                    q[i] += perturb;
+                }
+                
+                if(_use_joint_limits) {
+                    applyJointLimits(q);
+                }
+                
+                stalled_count = 0;
+                continue;
+            }
+            
+            // 使用加速收敛策略
+            if(iter > 20 && error_norm > 0.1f && stalled_count > 3) {
+                // 误差仍然较大且收敛缓慢，尝试更激进的搜索
+                for(int i = 0; i < ARM_DOF; i++) {
+                    q[i] = q_starts[0][i] + (random(2000) / 1000.0f - 1.0f) * 0.3f;
+                }
+                if(_use_joint_limits) {
+                    applyJointLimits(q);
+                }
+                stalled_count = 0;
+                continue;
+            }
+            
+            // 计算雅可比矩阵
+            float J[6][ARM_DOF];
+            getJacobian(q, J);
+            
+            // 对雅可比矩阵进行加权调整
+            for(int i = 0; i < 3; i++) {
+                for(int j = 0; j < ARM_DOF; j++) {
+                    J[i][j] *= position_weight;
+                }
+            }
+            
+            for(int i = 3; i < 6; i++) {
+                for(int j = 0; j < ARM_DOF; j++) {
+                    J[i][j] *= orientation_weight;
+                }
+            }
+            
+            // 计算雅可比条件数
+            float cond_J = approximateConditionNumber(J);
+            
+            // 自适应阻尼系数
+            float damping;
+            if(cond_J > 1e4) {
+                // 接近奇异点，大阻尼
+                damping = 0.1f;
+            } else if(error_norm > 0.5f) {
+                // 误差大，中等阻尼
+                damping = 0.01f;
+            } else {
+                // 误差小，小阻尼
+                damping = 0.001f;
+            }
+            
+            // 设置阻尼参数
+            _damping = damping;
+            
+            // 计算阻尼伪逆
+            float J_pinv[ARM_DOF][6];
+            pseudoInverse(J, J_pinv);
+            
+            // 计算关节角度增量
+            float dq[ARM_DOF] = {0};
+            for(int i = 0; i < ARM_DOF; i++) {
+                dq[i] = 0.0f;
+                for(int j = 0; j < 6; j++) {
+                    dq[i] += J_pinv[i][j] * error[j];
+                }
+            }
+            
+            // 优化线搜索
+            float alpha;
+            if(error_norm > 0.5f) {
+                alpha = 0.1f;  // 误差大时，谨慎步长
+            } else if(error_norm > 0.1f) {
+                alpha = 0.3f;  // 中等误差，适中步长
+            } else {
+                alpha = 0.5f;  // 误差小时，较大步长
+            }
+            
+            // 线搜索 - 尝试不同步长
+            float best_new_error = error_norm;
+            float q_best_step[ARM_DOF];
+            for(int i = 0; i < ARM_DOF; i++) {
+                q_best_step[i] = q[i];
+            }
+            
+            bool step_accepted = false;
+            
+            // 自适应步长参数
+            float step_factors[] = {1.0f, 0.5f, 0.25f, 0.125f, 0.0625f, 0.03125f};
+            int num_steps = sizeof(step_factors) / sizeof(step_factors[0]);
+            
+            for(int s = 0; s < num_steps; s++) {
+                float q_trial[ARM_DOF];
+                float current_step = alpha * step_factors[s];
+                
+                for(int i = 0; i < ARM_DOF; i++) {
+                    q_trial[i] = q[i] + current_step * dq[i];
+                }
+                
+                if(_use_joint_limits) {
+                    for(int i = 0; i < ARM_DOF; i++) {
+                        if(q_trial[i] < _joint_lower[i]) q_trial[i] = _joint_lower[i];
+                        else if(q_trial[i] > _joint_upper[i]) q_trial[i] = _joint_upper[i];
                     }
-                    last_error = INFINITY;
-                    continue;
-                } else {
-                    // 误差停滞，提前结束
+                }
+                
+                // 评估新点
+                float T_trial[4][4];
+                forwardKinematics(q_trial, T_trial);
+                
+                float trial_error[6];
+                computeFullError(T_trial, T_des, trial_error);
+                
+                // 应用权重
+                for(int i = 0; i < 3; i++) {
+                    trial_error[i] *= position_weight;
+                }
+                for(int i = 3; i < 6; i++) {
+                    trial_error[i] *= orientation_weight;
+                }
+                
+                float trial_error_norm = vectorNorm(trial_error, 6);
+                
+                if(trial_error_norm < best_new_error) {
+                    best_new_error = trial_error_norm;
+                    for(int i = 0; i < ARM_DOF; i++) {
+                        q_best_step[i] = q_trial[i];
+                    }
+                    step_accepted = true;
+                    
+                    // 如果误差显著减少，立即接受这个步长
+                    if(trial_error_norm < 0.9f * error_norm) {
+                        break;
+                    }
+                }
+            }
+            
+            // 更新解
+            if(step_accepted) {
+                for(int i = 0; i < ARM_DOF; i++) {
+                    q[i] = q_best_step[i];
+                }
+            } else {
+                // 所有步长都不能改善，使用微小步长
+                float tiny_alpha = 0.001f;
+                for(int i = 0; i < ARM_DOF; i++) {
+                    q[i] += tiny_alpha * dq[i];
+                }
+                
+                if(_use_joint_limits) {
+                    applyJointLimits(q);
+                }
+            }
+            
+            // 收敛检查
+            if(iter > min_iterations) {
+                if(abs(last_error - error_norm) < 0.0001f) {
+                    // 误差不再显著减小
+                    if(pos_error < 0.05f) {
+                        // 位置误差已经足够小，可以接受
+                        break;
+                    }
+                }
+                
+                if(pos_error < 0.01f && ori_error < 0.05f) {
+                    // 位置和姿态误差都很小，提前结束
+                    found_good_solution = true;
                     break;
                 }
             }
+            
+            last_error = error_norm;
         }
-        last_error = error_norm;
+        
+        // 如果找到了好的解决方案，就不再尝试其他起点
+        if(found_good_solution) break;
     }
     
-    // 所有迭代结束，返回最佳解
-    if(!success) {
-        for(int i = 0; i < ARM_DOF; i++) {
-            q_result[i] = best_q[i];
-        }
-        success = (min_error < 0.2f);  // 放宽成功标准
-        _last_error = min_error;
+    // 所有迭代和起点尝试结束，返回全局最佳解
+    for(int i = 0; i < ARM_DOF; i++) {
+        q_result[i] = best_q[i];
     }
     
+    // 计算最终误差（不加权）
+    float T_final[4][4];
+    forwardKinematics(best_q, T_final);
+    float final_error[6];
+    computeFullError(T_final, T_des, final_error);
+    float pos_err = sqrt(final_error[0]*final_error[0] + final_error[1]*final_error[1] + final_error[2]*final_error[2]);
+    
+    // 返回真实误差（主要考虑位置精度）
+    _last_error = pos_err;
+    _last_iter_count = actual_iterations;
+    
+    // 大幅放宽成功标准，即使误差较大也返回解，让上层应用决定是否使用
+    bool success = (pos_err < 0.08f);  // 将阈值从0.05f提高到0.08f
     return success;
 }
 

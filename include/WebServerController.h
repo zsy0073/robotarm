@@ -54,6 +54,11 @@ public:
     
     // 检查机械臂控制器是否已连接
     static bool isArmControllerConnected();
+    
+    // 获取机械臂控制器实例指针 (用于全局函数访问)
+    static RobotArmController* getArmController() { 
+        return armController; 
+    }
 
 private:
     // Web服务器实例

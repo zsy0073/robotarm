@@ -298,6 +298,153 @@ void WebServerController::setupRoutes() {
         }
     });
     webServer->addHandler(deletePresetHandler);
+
+    // 添加运动学相关API路由
+    
+    // 切换控制模式API
+    AsyncCallbackJsonWebHandler* setControlModeHandler = new AsyncCallbackJsonWebHandler(
+        "/api/control_mode", 
+        [](AsyncWebServerRequest *request, JsonVariant &json) {
+            if (!isArmControllerConnected()) {
+                request->send(503, "text/plain", "机械臂控制器未连接");
+                return;
+            }
+            
+            JsonObject jsonObj = json.as<JsonObject>();
+            
+            if (jsonObj.containsKey("mode")) {
+                // 0 - 关节角度模式，1 - 运动学模式
+                int modeValue = jsonObj["mode"];
+                ArmControlMode newMode = modeValue == 1 ? KINEMATICS_MODE : JOINT_ANGLE_MODE;
+                
+                // 切换控制模式
+                armController->setControlMode(newMode);
+                
+                request->send(200, "text/plain", "控制模式已切换");
+            } else {
+                request->send(400, "text/plain", "缺少必要参数");
+            }
+        }
+    );
+    webServer->addHandler(setControlModeHandler);
+    
+    // 获取当前控制模式API
+    webServer->on("/api/control_mode", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (!isArmControllerConnected()) {
+            request->send(503, "text/plain", "机械臂控制器未连接");
+            return;
+        }
+        
+        // 获取当前控制模式
+        ArmControlMode mode = armController->getControlMode();
+        
+        String response = "{\"mode\": " + String(mode == KINEMATICS_MODE ? 1 : 0) + "}";
+        request->send(200, "application/json", response);
+    });
+    
+    // 获取末端执行器位姿API
+    webServer->on("/api/end_effector", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (!isArmControllerConnected()) {
+            request->send(503, "text/plain", "机械臂控制器未连接");
+            return;
+        }
+        
+        // 获取末端执行器位姿
+        float x, y, z, roll, pitch, yaw;
+        bool success = armController->getEndEffectorPose(x, y, z, roll, pitch, yaw);
+        
+        if (success) {
+            // 转换为角度制
+            float roll_deg = roll * 180 / PI;
+            float pitch_deg = pitch * 180 / PI;
+            float yaw_deg = yaw * 180 / PI;
+            
+            String response = "{\"success\": true, \"position\": {\"x\": " + 
+                String(x, 3) + ", \"y\": " + String(y, 3) + ", \"z\": " + String(z, 3) + 
+                "}, \"orientation\": {\"roll\": " + String(roll_deg, 1) + 
+                ", \"pitch\": " + String(pitch_deg, 1) + ", \"yaw\": " + String(yaw_deg, 1) + "}}";
+                
+            request->send(200, "application/json", response);
+        } else {
+            request->send(500, "application/json", "{\"success\": false, \"message\": \"获取末端位姿失败\"}");
+        }
+    });
+    
+    // 设置末端执行器位姿API
+    AsyncCallbackJsonWebHandler* setEndEffectorHandler = new AsyncCallbackJsonWebHandler(
+        "/api/end_effector", 
+        [](AsyncWebServerRequest *request, JsonVariant &json) {
+            if (!isArmControllerConnected()) {
+                request->send(503, "text/plain", "机械臂控制器未连接");
+                return;
+            }
+            
+            JsonObject jsonObj = json.as<JsonObject>();
+            
+            // 检查是否有必要的位姿参数
+            if (jsonObj.containsKey("position") && jsonObj.containsKey("orientation")) {
+                JsonObject position = jsonObj["position"];
+                JsonObject orientation = jsonObj["orientation"];
+                
+                // 提取位置和姿态参数
+                float x = position["x"] | 0.0f;
+                float y = position["y"] | 0.0f;
+                float z = position["z"] | 0.0f;
+                
+                // 角度值转换为弧度
+                float roll = (orientation["roll"] | 0.0f) * PI / 180.0f;
+                float pitch = (orientation["pitch"] | 0.0f) * PI / 180.0f;
+                float yaw = (orientation["yaw"] | 0.0f) * PI / 180.0f;
+                
+                // 设置末端执行器位姿
+                bool success = armController->setEndEffectorPose(x, y, z, roll, pitch, yaw);
+                
+                if (success) {
+                    request->send(200, "application/json", "{\"success\": true}");
+                } else {
+                    request->send(500, "application/json", 
+                        "{\"success\": false, \"message\": \"设置末端位姿失败，可能超出工作空间\"}");
+                }
+            } else {
+                request->send(400, "text/plain", "缺少必要的位姿参数");
+            }
+        }
+    );
+    webServer->addHandler(setEndEffectorHandler);
+    
+    // 末端执行器增量移动API
+    AsyncCallbackJsonWebHandler* moveEndEffectorHandler = new AsyncCallbackJsonWebHandler(
+        "/api/move_end_effector", 
+        [](AsyncWebServerRequest *request, JsonVariant &json) {
+            if (!isArmControllerConnected()) {
+                request->send(503, "text/plain", "机械臂控制器未连接");
+                return;
+            }
+            
+            JsonObject jsonObj = json.as<JsonObject>();
+            
+            // 提取增量参数
+            float dx = jsonObj["dx"] | 0.0f;
+            float dy = jsonObj["dy"] | 0.0f;
+            float dz = jsonObj["dz"] | 0.0f;
+            
+            // 角度值转换为弧度
+            float droll = (jsonObj["droll"] | 0.0f) * PI / 180.0f;
+            float dpitch = (jsonObj["dpitch"] | 0.0f) * PI / 180.0f;
+            float dyaw = (jsonObj["dyaw"] | 0.0f) * PI / 180.0f;
+            
+            // 执行增量移动
+            bool success = armController->moveEndEffectorIncremental(dx, dy, dz, droll, dpitch, dyaw);
+            
+            if (success) {
+                request->send(200, "application/json", "{\"success\": true}");
+            } else {
+                request->send(500, "application/json", 
+                    "{\"success\": false, \"message\": \"增量移动失败，可能超出工作空间\"}");
+            }
+        }
+    );
+    webServer->addHandler(moveEndEffectorHandler);
 }
 
 // 处理主页请求
@@ -853,6 +1000,191 @@ void WebServerController::handleGetRecordedCommands(AsyncWebServerRequest *reque
     
     String response;
     serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+// 处理获取控制模式请求
+void handleGetControlMode(AsyncWebServerRequest *request) {
+    StaticJsonDocument<128> doc;
+    
+    // 获取当前控制模式
+    if (WebServerController::isArmControllerConnected()) {
+        ArmControlMode mode = WebServerController::getArmController()->getControlMode();
+        doc["mode"] = (int)mode;
+        doc["success"] = true;
+    } else {
+        doc["success"] = false;
+        doc["message"] = "机械臂控制器未连接";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+// 处理设置控制模式请求
+void handleSetControlMode(AsyncWebServerRequest *request, JsonVariant &json) {
+    StaticJsonDocument<128> doc;
+    bool success = false;
+    
+    if (json.is<JsonObject>()) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        
+        if (jsonObj.containsKey("mode")) {
+            int mode = jsonObj["mode"];
+            
+            if (WebServerController::isArmControllerConnected()) {
+                // 设置控制模式
+                WebServerController::getArmController()->setControlMode((ArmControlMode)mode);
+                success = true;
+                doc["success"] = true;
+                doc["mode"] = mode;
+            } else {
+                doc["success"] = false;
+                doc["message"] = "机械臂控制器未连接";
+            }
+        } else {
+            doc["success"] = false;
+            doc["message"] = "缺少mode参数";
+        }
+    } else {
+        doc["success"] = false;
+        doc["message"] = "无效的JSON格式";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+// 处理获取末端执行器位姿请求
+void handleGetEndEffectorPose(AsyncWebServerRequest *request) {
+    StaticJsonDocument<256> doc;
+    
+    // 获取当前末端执行器位姿
+    float x, y, z, roll, pitch, yaw;
+    
+    if (WebServerController::isArmControllerConnected()) {
+        bool success = WebServerController::getArmController()->getEndEffectorPose(x, y, z, roll, pitch, yaw);
+        
+        doc["success"] = success;
+        if (success) {
+            JsonObject position = doc.createNestedObject("position");
+            position["x"] = x * 100.0f; // 转换为厘米
+            position["y"] = y * 100.0f;
+            position["z"] = z * 100.0f;
+            
+            JsonObject orientation = doc.createNestedObject("orientation");
+            orientation["roll"] = roll * 180.0f / PI; // 转换为角度
+            orientation["pitch"] = pitch * 180.0f / PI;
+            orientation["yaw"] = yaw * 180.0f / PI;
+        } else {
+            doc["message"] = "获取末端位姿失败";
+        }
+    } else {
+        doc["success"] = false;
+        doc["message"] = "机械臂控制器未连接";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+// 处理设置末端执行器位姿请求
+void handleSetEndEffectorPose(AsyncWebServerRequest *request, JsonVariant &json) {
+    StaticJsonDocument<256> doc;
+    bool success = false;
+    
+    if (json.is<JsonObject>()) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        
+        if (jsonObj.containsKey("position") && jsonObj.containsKey("orientation")) {
+            JsonObject position = jsonObj["position"];
+            JsonObject orientation = jsonObj["orientation"];
+            
+            float x = position["x"].as<float>() / 100.0f; // 从厘米转换为米
+            float y = position["y"].as<float>() / 100.0f;
+            float z = position["z"].as<float>() / 100.0f;
+            float roll = orientation["roll"].as<float>() * PI / 180.0f; // 从角度转换为弧度
+            float pitch = orientation["pitch"].as<float>() * PI / 180.0f;
+            float yaw = orientation["yaw"].as<float>() * PI / 180.0f;
+            
+            if (WebServerController::isArmControllerConnected()) {
+                // 设置末端执行器位姿
+                success = WebServerController::getArmController()->setEndEffectorPose(x, y, z, roll, pitch, yaw);
+                
+                doc["success"] = success;
+                if (!success) {
+                    doc["message"] = "位姿设置失败，可能超出工作空间";
+                }
+            } else {
+                doc["success"] = false;
+                doc["message"] = "机械臂控制器未连接";
+            }
+        } else {
+            doc["success"] = false;
+            doc["message"] = "缺少position或orientation参数";
+        }
+    } else {
+        doc["success"] = false;
+        doc["message"] = "无效的JSON格式";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+}
+
+// 处理末端执行器增量移动请求
+void handleMoveEndEffector(AsyncWebServerRequest *request, JsonVariant &json) {
+    StaticJsonDocument<256> doc;
+    bool success = false;
+    
+    if (json.is<JsonObject>()) {
+        JsonObject jsonObj = json.as<JsonObject>();
+        
+        float dx = jsonObj["dx"] | 0.0f;
+        float dy = jsonObj["dy"] | 0.0f;
+        float dz = jsonObj["dz"] | 0.0f;
+        float droll = jsonObj["droll"] | 0.0f;
+        float dpitch = jsonObj["dpitch"] | 0.0f;
+        float dyaw = jsonObj["dyaw"] | 0.0f;
+        
+        // 将角度增量转换为弧度
+        droll = droll * PI / 180.0f;
+        dpitch = dpitch * PI / 180.0f;
+        dyaw = dyaw * PI / 180.0f;
+        
+        // 将位置增量转换为米（从厘米）
+        dx = dx / 100.0f;
+        dy = dy / 100.0f;
+        dz = dz / 100.0f;
+        
+        if (WebServerController::isArmControllerConnected()) {
+            // 增量移动末端执行器
+            success = WebServerController::getArmController()->moveEndEffectorIncremental(dx, dy, dz, droll, dpitch, dyaw);
+            
+            doc["success"] = success;
+            if (!success) {
+                doc["message"] = "增量移动失败，可能超出工作空间";
+            }
+        } else {
+            doc["success"] = false;
+            doc["message"] = "机械臂控制器未连接";
+        }
+    } else {
+        doc["success"] = false;
+        doc["message"] = "无效的JSON格式";
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    
     request->send(200, "application/json", response);
 }
 

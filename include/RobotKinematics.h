@@ -5,8 +5,8 @@
 
 // 机械臂参数常量
 #define ARM_DOF 7              // 7自由度
-#define DEFAULT_MAX_ITER 50    // 逆解最大迭代次数
-#define DEFAULT_TOL 1e-5f      // 收敛阈值
+#define DEFAULT_MAX_ITER 100    // 逆解最大迭代次数
+#define DEFAULT_TOL 1e-4f      // 收敛阈值
 #define DEFAULT_DAMPING 0.05f  // 基础阻尼因子
 #define DEFAULT_DAMPING_FACTOR 5.0f // 阻尼调整系数
 

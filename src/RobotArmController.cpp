@@ -1,11 +1,12 @@
 /******************************************************
 * FileName:      RobotArmController.cpp
-* Date:          2025/05/04
+* Date:          5/4/2025
 * Description:   机械臂控制器类的实现文件
 *****************************************************/
 
 #include "RobotArmController.h"
 #include "ServoCommandRecorder.h"
+#include <math.h>
 
 // 构造函数
 RobotArmController::RobotArmController() : 
@@ -532,9 +533,19 @@ bool RobotArmController::processKinematicsMode(ServoCommandType& type, uint8_t& 
             type = MOVE_ALL_SERVOS;
             
             Serial.println("运动学控制：末端增量移动成功");
+            // 输出逆解迭代次数和最终误差
+            Serial.print("逆解迭代次数: "); 
+            Serial.println(kinematics.getLastIterCount());
+            Serial.print("最终误差: "); 
+            Serial.println(kinematics.getLastError(), 6);
             return true;
         } else {
             Serial.println("运动学控制：末端增量移动失败，可能超出工作空间范围");
+            // 失败时也输出逆解迭代次数和最终误差
+            Serial.print("逆解迭代次数: "); 
+            Serial.println(kinematics.getLastIterCount());
+            Serial.print("最终误差: "); 
+            Serial.println(kinematics.getLastError(), 6);
             return false;
         }
     }

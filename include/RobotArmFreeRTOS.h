@@ -16,6 +16,7 @@
 #include "RobotArmConfig.h"
 #include "RobotArmCommon.h" // 使用共享头文件获取ServoCommandType和ServoCommand_t定义
 #include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
+#include "TempSensorDisplay.h" // 添加温度传感器显示功能头文件
 
 // 在全局范围内声明录制相关函数，使它们在所有文件中可用
 extern bool startRecording(const char* fileName);

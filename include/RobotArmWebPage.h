@@ -218,93 +218,244 @@ const char index_html[] PROGMEM = R"rawliteral(
     .idle {
       color: #666;
     }
+    /* 添加运动学模式相关样式 */
+    .kinematics-section {
+      margin-top: 30px;
+      padding: 15px;
+      background-color: #f2f8ef;
+      border-radius: 5px;
+      border: 1px solid #ccc;
+      display: none; /* 默认隐藏 */
+    }
+    .mode-toggle {
+      margin-top: 20px;
+      text-align: center;
+    }
+    .mode-btn {
+      padding: 10px 20px;
+      margin: 0 10px;
+      font-weight: bold;
+    }
+    .active-mode {
+      background-color: #28a745;
+      color: white;
+    }
+    .input-group {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .input-group label {
+      width: 100px;
+      margin-right: 10px;
+    }
+    .input-group input {
+      width: 80px;
+      text-align: right;
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+    .input-group .unit {
+      margin-left: 5px;
+      color: #666;
+      width: 30px;
+    }
+    .coordinate-controls {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+    }
+    .coordinate-group {
+      width: 48%;
+      margin-bottom: 15px;
+      padding: 10px;
+      background-color: #f9f9f9;
+      border-radius: 5px;
+      border: 1px solid #eee;
+    }
+    .coordinate-title {
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #333;
+    }
+    .move-buttons {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      grid-gap: 5px;
+      margin-top: 10px;
+    }
+    .move-btn {
+      padding: 8px 0;
+      font-size: 14px;
+      text-align: center;
+    }
+    .move-value {
+      grid-column: span 3;
+      margin-bottom: 5px;
+    }
+    .move-value input {
+      width: 100%;
+      padding: 5px;
+      box-sizing: border-box;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>机械臂控制面板</h1>
     
-    <div class="servo-control">
-      <h2>底座舵机</h2>
-      <div class="slider-container">
-        <label for="base">旋转控制:</label>
-        <button class="control-btn" onclick="decrementServo(1, 'base', 10)">-</button>
-        <input type="range" id="base" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'baseValue', 1)">
-        <button class="control-btn" onclick="incrementServo(1, 'base', 10)">+</button>
-        <span id="baseValue" class="value-display">500</span>
+    <!-- 添加控制模式切换按钮 -->
+    <div class="mode-toggle">
+      <button id="jointModeBtn" class="mode-btn active-mode" onclick="switchControlMode(0)">关节角度模式</button>
+      <button id="kinematicsModeBtn" class="mode-btn" onclick="switchControlMode(1)">运动学模式</button>
+    </div>
+    
+    <!-- 关节控制区域 -->
+    <div id="jointControlArea">
+      <div class="servo-control">
+        <h2>底座舵机</h2>
+        <div class="slider-container">
+          <label for="base">旋转控制:</label>
+          <button class="control-btn" onclick="decrementServo(1, 'base', 10)">-</button>
+          <input type="range" id="base" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'baseValue', 1)">
+          <button class="control-btn" onclick="incrementServo(1, 'base', 10)">+</button>
+          <span id="baseValue" class="value-display">500</span>
+        </div>
+      </div>
+
+      <div class="servo-control">
+        <h2>肩部舵机</h2>
+        <div class="slider-container">
+          <label for="shoulder">俯仰控制:</label>
+          <button class="control-btn" onclick="decrementServo(2, 'shoulder', 10)">-</button>
+          <input type="range" id="shoulder" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'shoulderValue', 2)">
+          <button class="control-btn" onclick="incrementServo(2, 'shoulder', 10)">+</button>
+          <span id="shoulderValue" class="value-display">500</span>
+        </div>
+        <div class="slider-container">
+          <label for="shoulderRoll">滚转控制:</label>
+          <button class="control-btn" onclick="decrementServo(3, 'shoulderRoll', 10)">-</button>
+          <input type="range" id="shoulderRoll" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'shoulderRollValue', 3)">
+          <button class="control-btn" onclick="incrementServo(3, 'shoulderRoll', 10)">+</button>
+          <span id="shoulderRollValue" class="value-display">500</span>
+        </div>
+      </div>
+
+      <div class="servo-control">
+        <h2>肘部舵机</h2>
+        <div class="slider-container">
+          <label for="elbow">俯仰控制:</label>
+          <button class="control-btn" onclick="decrementServo(4, 'elbow', 10)">-</button>
+          <input type="range" id="elbow" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'elbowValue', 4)">
+          <button class="control-btn" onclick="incrementServo(4, 'elbow', 10)">+</button>
+          <span id="elbowValue" class="value-display">500</span>
+        </div>
+      </div>
+
+      <div class="servo-control">
+        <h2>腕部舵机</h2>
+        <div class="slider-container">
+          <label for="wrist">俯仰控制:</label>
+          <button class="control-btn" onclick="decrementServo(5, 'wrist', 10)">-</button>
+          <input type="range" id="wrist" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'wristValue', 5)">
+          <button class="control-btn" onclick="incrementServo(5, 'wrist', 10)">+</button>
+          <span id="wristValue" class="value-display">500</span>
+        </div>
+        <div class="slider-container">
+          <label for="wristRoll">滚转控制:</label>
+          <button class="control-btn" onclick="decrementServo(6, 'wristRoll', 10)">-</button>
+          <input type="range" id="wristRoll" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'wristRollValue', 6)">
+          <button class="control-btn" onclick="incrementServo(6, 'wristRoll', 10)">+</button>
+          <span id="wristRollValue" class="value-display">500</span>
+        </div>
+        <div class="slider-container">
+          <label for="wristYaw">偏航控制:</label>
+          <button class="control-btn" onclick="decrementServo(7, 'wristYaw', 10)">-</button>
+          <input type="range" id="wristYaw" min="0" max="1000" value="500" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'wristYawValue', 7)">
+          <button class="control-btn" onclick="incrementServo(7, 'wristYaw', 10)">+</button>
+          <span id="wristYawValue" class="value-display">500</span>
+        </div>
+      </div>
+
+      <div class="servo-control">
+        <h2>夹爪舵机</h2>
+        <div class="slider-container">
+          <label for="gripper">开合控制:</label>
+          <button class="control-btn" onclick="decrementServo(8, 'gripper', 10)">-</button>
+          <input type="range" id="gripper" min="0" max="1000" value="0" class="slider" 
+                 oninput="updateSliderValueAndMove(this, 'gripperValue', 8)">
+          <button class="control-btn" onclick="incrementServo(8, 'gripper', 10)">+</button>
+          <span id="gripperValue" class="value-display">0</span>
+        </div>
       </div>
     </div>
 
-    <div class="servo-control">
-      <h2>肩部舵机</h2>
-      <div class="slider-container">
-        <label for="shoulder">俯仰控制:</label>
-        <button class="control-btn" onclick="decrementServo(2, 'shoulder', 10)">-</button>
-        <input type="range" id="shoulder" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'shoulderValue', 2)">
-        <button class="control-btn" onclick="incrementServo(2, 'shoulder', 10)">+</button>
-        <span id="shoulderValue" class="value-display">500</span>
+    <!-- 运动学控制区域 -->
+    <div id="kinematicsControlArea" class="kinematics-section">
+      <h2>末端位置姿态控制</div>
+      <div class="coordinate-controls">
+        <div class="coordinate-group">
+          <div class="coordinate-title">位置控制</div>
+          <div class="input-group">
+            <label for="posX">X:</label>
+            <input type="number" id="posX" value="0">
+            <span class="unit">mm</span>
+          </div>
+          <div class="input-group">
+            <label for="posY">Y:</label>
+            <input type="number" id="posY" value="0">
+            <span class="unit">mm</span>
+          </div>
+          <div class="input-group">
+            <label for="posZ">Z:</label>
+            <input type="number" id="posZ" value="0">
+            <span class="unit">mm</span>
+          </div>
+        </div>
+        <div class="coordinate-group">
+          <div class="coordinate-title">姿态控制</div>
+          <div class="input-group">
+            <label for="rotRoll">滚转:</label>
+            <input type="number" id="rotRoll" value="0">
+            <span class="unit">°</span>
+          </div>
+          <div class="input-group">
+            <label for="rotPitch">俯仰:</label>
+            <input type="number" id="rotPitch" value="0">
+            <span class="unit">°</span>
+          </div>
+          <div class="input-group">
+            <label for="rotYaw">偏航:</label>
+            <input type="number" id="rotYaw" value="0">
+            <span class="unit">°</span>
+          </div>
+        </div>
       </div>
-      <div class="slider-container">
-        <label for="shoulderRoll">滚转控制:</label>
-        <button class="control-btn" onclick="decrementServo(3, 'shoulderRoll', 10)">-</button>
-        <input type="range" id="shoulderRoll" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'shoulderRollValue', 3)">
-        <button class="control-btn" onclick="incrementServo(3, 'shoulderRoll', 10)">+</button>
-        <span id="shoulderRollValue" class="value-display">500</span>
-      </div>
-    </div>
-
-    <div class="servo-control">
-      <h2>肘部舵机</h2>
-      <div class="slider-container">
-        <label for="elbow">俯仰控制:</label>
-        <button class="control-btn" onclick="decrementServo(4, 'elbow', 10)">-</button>
-        <input type="range" id="elbow" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'elbowValue', 4)">
-        <button class="control-btn" onclick="incrementServo(4, 'elbow', 10)">+</button>
-        <span id="elbowValue" class="value-display">500</span>
-      </div>
-    </div>
-
-    <div class="servo-control">
-      <h2>腕部舵机</h2>
-      <div class="slider-container">
-        <label for="wrist">俯仰控制:</label>
-        <button class="control-btn" onclick="decrementServo(5, 'wrist', 10)">-</button>
-        <input type="range" id="wrist" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'wristValue', 5)">
-        <button class="control-btn" onclick="incrementServo(5, 'wrist', 10)">+</button>
-        <span id="wristValue" class="value-display">500</span>
-      </div>
-      <div class="slider-container">
-        <label for="wristRoll">滚转控制:</label>
-        <button class="control-btn" onclick="decrementServo(6, 'wristRoll', 10)">-</button>
-        <input type="range" id="wristRoll" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'wristRollValue', 6)">
-        <button class="control-btn" onclick="incrementServo(6, 'wristRoll', 10)">+</button>
-        <span id="wristRollValue" class="value-display">500</span>
-      </div>
-      <div class="slider-container">
-        <label for="wristYaw">偏航控制:</label>
-        <button class="control-btn" onclick="decrementServo(7, 'wristYaw', 10)">-</button>
-        <input type="range" id="wristYaw" min="0" max="1000" value="500" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'wristYawValue', 7)">
-        <button class="control-btn" onclick="incrementServo(7, 'wristYaw', 10)">+</button>
-        <span id="wristYawValue" class="value-display">500</span>
-      </div>
-    </div>
-
-    <div class="servo-control">
-      <h2>夹爪舵机</h2>
-      <div class="slider-container">
-        <label for="gripper">开合控制:</label>
-        <button class="control-btn" onclick="decrementServo(8, 'gripper', 10)">-</button>
-        <input type="range" id="gripper" min="0" max="1000" value="0" class="slider" 
-               oninput="updateSliderValueAndMove(this, 'gripperValue', 8)">
-        <button class="control-btn" onclick="incrementServo(8, 'gripper', 10)">+</button>
-        <span id="gripperValue" class="value-display">0</span>
+      <div class="move-buttons">
+        <div class="move-value">
+          <input type="number" id="moveStep" value="10" min="1" max="100" step="1">
+        </div>
+        <button class="move-btn" onclick="moveEndEffector('x', -1)">X-</button>
+        <button class="move-btn" onclick="moveEndEffector('x', 1)">X+</button>
+        <button class="move-btn" onclick="moveEndEffector('y', -1)">Y-</button>
+        <button class="move-btn" onclick="moveEndEffector('y', 1)">Y+</button>
+        <button class="move-btn" onclick="moveEndEffector('z', -1)">Z-</button>
+        <button class="move-btn" onclick="moveEndEffector('z', 1)">Z+</button>
+        <button class="move-btn" onclick="rotateEndEffector('roll', -1)">滚转-</button>
+        <button class="move-btn" onclick="rotateEndEffector('roll', 1)">滚转+</button>
+        <button class="move-btn" onclick="rotateEndEffector('pitch', -1)">俯仰-</button>
+        <button class="move-btn" onclick="rotateEndEffector('pitch', 1)">俯仰+</button>
+        <button class="move-btn" onclick="rotateEndEffector('yaw', -1)">偏航-</button>
+        <button class="move-btn" onclick="rotateEndEffector('yaw', 1)">偏航+</button>
       </div>
     </div>
 
@@ -373,6 +524,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     // 初始化页面加载时更新当前位置
     window.onload = function() {
       fetchAllServoPositions();
+      // 获取当前控制模式
+      fetchControlMode();
       // 启动定期轮询
       startPolling();
       // 启动录制状态轮询
@@ -1250,6 +1403,246 @@ const char index_html[] PROGMEM = R"rawliteral(
         alert('获取文件列表失败');
       });
     }
+
+    // 切换控制模式
+    function switchControlMode(mode) {
+      const jointControlArea = document.getElementById('jointControlArea');
+      const kinematicsControlArea = document.getElementById('kinematicsControlArea');
+      const jointModeBtn = document.getElementById('jointModeBtn');
+      const kinematicsModeBtn = document.getElementById('kinematicsModeBtn');
+      
+      // 发送控制模式切换请求
+      fetch('/api/control_mode', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ mode: mode })
+      })
+      .then(response => {
+        if (response.ok) {
+          if (mode === 0) {
+            jointControlArea.style.display = 'block';
+            kinematicsControlArea.style.display = 'none';
+            jointModeBtn.classList.add('active-mode');
+            kinematicsModeBtn.classList.remove('active-mode');
+            // 获取最新关节位置
+            fetchAllServoPositions();
+          } else {
+            jointControlArea.style.display = 'none';
+            kinematicsControlArea.style.display = 'block';
+            jointModeBtn.classList.remove('active-mode');
+            kinematicsModeBtn.classList.add('active-mode');
+            // 获取最新末端位姿
+            fetchEndEffectorPose();
+          }
+        } else {
+          alert('切换控制模式失败，请重试！');
+        }
+      })
+      .catch(error => {
+        console.error('切换控制模式时出错：', error);
+        alert('切换控制模式时发生错误！');
+      });
+    }
+
+    // 增量移动末端执行器位置和姿态
+    function moveEndEffector(axis, direction) {
+      const step = parseFloat(document.getElementById('moveStep').value) || 10;
+      let moveData = {
+        dx: 0,
+        dy: 0,
+        dz: 0,
+        droll: 0,
+        dpitch: 0,
+        dyaw: 0
+      };
+      
+      // 设置移动增量
+      if (axis === 'x') moveData.dx = direction * step;
+      else if (axis === 'y') moveData.dy = direction * step;
+      else if (axis === 'z') moveData.dz = direction * step;
+      
+      // 发送增量移动请求
+      fetch('/api/move_end_effector', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(moveData)
+      })
+      .then(response => {
+        if (response.ok) {
+          // 移动成功，更新显示的位置
+          fetchEndEffectorPose();
+        } else {
+          return response.json().then(data => {
+            alert('移动失败：' + (data.message || '超出工作空间'));
+          });
+        }
+      })
+      .catch(error => {
+        console.error('增量移动时出错：', error);
+      });
+    }
+
+    // 增量旋转末端执行器
+    function rotateEndEffector(axis, direction) {
+      const step = parseFloat(document.getElementById('moveStep').value) || 5;
+      let rotateData = {
+        dx: 0,
+        dy: 0,
+        dz: 0,
+        droll: 0,
+        dpitch: 0,
+        dyaw: 0
+      };
+      
+      // 设置旋转增量 (角度值)
+      if (axis === 'roll') rotateData.droll = direction * step;
+      else if (axis === 'pitch') rotateData.dpitch = direction * step;
+      else if (axis === 'yaw') rotateData.dyaw = direction * step;
+      
+      // 发送增量旋转请求
+      fetch('/api/move_end_effector', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(rotateData)
+      })
+      .then(response => {
+        if (response.ok) {
+          // 旋转成功，更新显示的姿态
+          fetchEndEffectorPose();
+        } else {
+          return response.json().then(data => {
+            alert('旋转失败：' + (data.message || '超出工作空间'));
+          });
+        }
+      })
+      .catch(error => {
+        console.error('增量旋转时出错：', error);
+      });
+    }
+
+    // 获取末端执行器位姿
+    function fetchEndEffectorPose() {
+      fetch('/api/end_effector')
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error('获取末端位姿失败');
+        }
+      })
+      .then(data => {
+        if (data.success) {
+          // 更新输入框中的值
+          document.getElementById('posX').value = data.position.x.toFixed(1);
+          document.getElementById('posY').value = data.position.y.toFixed(1);
+          document.getElementById('posZ').value = data.position.z.toFixed(1);
+          document.getElementById('rotRoll').value = data.orientation.roll.toFixed(1);
+          document.getElementById('rotPitch').value = data.orientation.pitch.toFixed(1);
+          document.getElementById('rotYaw').value = data.orientation.yaw.toFixed(1);
+        }
+      })
+      .catch(error => {
+        console.error('获取末端位姿时出错：', error);
+      });
+    }
+
+    // 直接设置末端位姿
+    function setEndEffectorPose() {
+      // 获取输入框中的值
+      const x = parseFloat(document.getElementById('posX').value);
+      const y = parseFloat(document.getElementById('posY').value);
+      const z = parseFloat(document.getElementById('posZ').value);
+      const roll = parseFloat(document.getElementById('rotRoll').value);
+      const pitch = parseFloat(document.getElementById('rotPitch').value);
+      const yaw = parseFloat(document.getElementById('rotYaw').value);
+      
+      // 检查输入值是否有效
+      if (isNaN(x) || isNaN(y) || isNaN(z) || isNaN(roll) || isNaN(pitch) || isNaN(yaw)) {
+        alert('请输入有效的位姿值！');
+        return;
+      }
+      
+      const poseData = {
+        position: { x, y, z },
+        orientation: { roll, pitch, yaw }
+      };
+      
+      // 发送位姿设置请求
+      fetch('/api/end_effector', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(poseData)
+      })
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          return response.json().then(data => {
+            throw new Error(data.message || '设置位姿失败');
+          });
+        }
+      })
+      .then(data => {
+        if (data.success) {
+          console.log('末端位姿设置成功');
+        } else {
+          alert('设置位姿失败：' + (data.message || '可能超出工作空间'));
+        }
+      })
+      .catch(error => {
+        console.error('设置末端位姿时出错：', error);
+        alert('设置末端位姿失败：' + error.message);
+      });
+    }
+
+    // 获取当前控制模式
+    function fetchControlMode() {
+      fetch('/api/control_mode')
+      .then(response => {
+        if (response.ok) {
+          return response.json();
+        } else {
+          throw new Error('获取控制模式失败');
+        }
+      })
+      .then(data => {
+        // 根据当前模式更新界面
+        switchControlMode(data.mode);
+      })
+      .catch(error => {
+        console.error('获取控制模式时出错：', error);
+      });
+    }
+
+    // 为末端位姿输入框添加事件处理
+    document.addEventListener('DOMContentLoaded', function() {
+      const poseInputs = document.querySelectorAll('#posX, #posY, #posZ, #rotRoll, #rotPitch, #rotYaw');
+      poseInputs.forEach(input => {
+        input.addEventListener('change', function() {
+          setEndEffectorPose();
+        });
+      });
+      
+      // 添加末端坐标直接设置按钮
+      const coordSection = document.querySelector('.coordinate-controls');
+      if (coordSection) {
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent = '应用位姿';
+        applyBtn.className = 'home';
+        applyBtn.style.marginTop = '10px';
+        applyBtn.style.width = '100%';
+        applyBtn.onclick = setEndEffectorPose;
+        coordSection.appendChild(applyBtn);
+      }
+    });
   </script>
 </body>
 </html>

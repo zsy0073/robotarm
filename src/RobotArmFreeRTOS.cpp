@@ -7,6 +7,7 @@
 #include "RobotArmFreeRTOS.h"
 #include "RobotArmController.h"
 #include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
+#include "TempSensorDisplay.h" // 添加温度传感器显示功能头文件
 
 // 函数前向声明
 void processPS2Input();
@@ -138,6 +139,9 @@ bool initRobotArmTasks() {
         &webServerTaskHandle,           // 任务句柄指针
         0                               // 在Core 0上运行
     );
+    
+    // 初始化温度传感器显示模块
+    initTempSensorDisplay();
     
     return initSuccess;
 }
@@ -581,4 +585,20 @@ void playbackTask(void* pvParameters) {
     // 删除自身
     playbackTaskHandle = NULL;
     vTaskDelete(NULL);
+}
+
+// 初始化温度传感器和显示屏
+void initTempSensorDisplay() {
+    // 创建任务
+    xTaskCreatePinnedToCore(
+        tempDisplayTask,                // 任务函数
+        "TempDisplayTask",              // 任务名称
+        TEMP_DISPLAY_STACK_SIZE,        // 堆栈大小
+        NULL,                           // 任务参数
+        TEMP_DISPLAY_PRIORITY,          // 任务优先级
+        &tempDisplayTaskHandle,         // 任务句柄指针
+        1                               // 在Core 1上运行
+    );
+    
+    Serial.println("Temperature sensor display module initialized");
 }
