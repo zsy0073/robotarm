@@ -8,18 +8,25 @@
 #include "RobotArmFreeRTOS.h"
 #include "RobotArmConfig.h"
 #include "WebServerController.h"
+#include "SafetyFeatures.h"  // 包含安全特性头文件
 
 
 void setup() {
   // 初始化串口通信
   Serial.begin(SERIAL_BAUDRATE);
-  // 移除启动提示
+  Serial.println("\n\n机械臂控制系统启动中...");
+  
+  // 添加短延迟以便观察启动提示
+  delay(500);
   
   // 初始化FreeRTOS任务和资源
   initRobotArmTasks();
   
+  // 安全功能已经在initRobotArmTasks中初始化
   // FreeRTOS任务已经在initRobotArmTasks中创建并运行
   // 包括Web服务器任务
+  
+  Serial.println("系统初始化完成，机械臂处于锁定状态，请通过安全开关解锁后使用");
 }
 
 void loop() {

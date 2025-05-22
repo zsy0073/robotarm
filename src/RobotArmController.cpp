@@ -7,6 +7,7 @@
 #include "RobotArmController.h"
 #include "ServoCommandRecorder.h"
 #include <math.h>
+#include "SafetyFeatures.h" // 添加安全功能头文件
 
 // 构造函数
 RobotArmController::RobotArmController() : 
@@ -1211,9 +1212,37 @@ void RobotArmController::updateEndEffectorPose() {
         Serial.print(position[2], 3); Serial.println("]");
         Serial.print("姿态(rad): [");
         Serial.print(euler[2], 3); Serial.print(", ");
-        Serial.print(euler[1], 3); Serial.print(", ");
-        Serial.print(euler[0], 3); Serial.println("]");
+        Serial.print(euler[1], 3); Serial.print(", ");        Serial.print(euler[0], 3); Serial.println("]");
     } else {
         Serial.println("末端位姿更新失败：正运动学计算错误");
     }
+}
+
+// 检查舵机是否正在移动
+bool RobotArmController::isServoMoving(uint8_t servoID) {
+    // 检查servoID是否有效，超出范围的ID视为不在移动
+    if (servoID < 1 || servoID > SERVO_COUNT) {
+        return false;
+    }
+    
+    // 检查速度控制值是否非零 - 表示舵机正在移动
+    if (servoSpeedControl[servoID - 1] != 0) {
+        return true;
+    }
+    
+    // 如果使用了舵机控制器提供的运动状态检测，也可以在这里添加
+    // 例如: return controller.isServoMoving(servoID);
+    
+    // 当前简单实现：任何非零的速度控制值都表示舵机在移动
+    return false;
+}
+
+// 检查所有舵机是否都停止移动
+bool RobotArmController::allServosIdle() {
+    for (int i = 0; i < SERVO_COUNT; i++) {
+        if (servoSpeedControl[i] != 0) {
+            return false; // 只要有一个舵机在移动，就返回false
+        }
+    }
+    return true; // 所有舵机都不在移动
 }

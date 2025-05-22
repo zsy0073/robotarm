@@ -8,6 +8,7 @@
 #include "RobotArmController.h"
 #include "ServoCommandRecorder.h" // 添加舵机命令录制器头文件
 #include "TempSensorDisplay.h" // 添加温度传感器显示功能头文件
+#include "SafetyFeatures.h" // 添加安全功能头文件
 
 // 函数前向声明
 void processPS2Input();
@@ -128,8 +129,7 @@ bool initRobotArmTasks() {
         &statusMonitorTaskHandle,       // 任务句柄指针
         0                               // 在Core 0上运行
     );
-    
-    // 创建Web服务器任务
+      // 创建Web服务器任务
     xTaskCreatePinnedToCore(
         webServerTask,                  // 任务函数
         "WebServerTask",                // 任务名称
@@ -143,6 +143,9 @@ bool initRobotArmTasks() {
     // 初始化温度传感器显示模块
     initTempSensorDisplay();
     
+    // 初始化安全功能模块（蜂鸣器、安全开关和状态指示灯）
+    initSafetyFeatures();
+    
     return initSuccess;
 }
 
@@ -153,6 +156,13 @@ void servoControlTask(void *pvParameters) {
     for (;;) {
         // 等待队列中的命令
         if (xQueueReceive(servoCommandQueue, &command, portMAX_DELAY) == pdTRUE) {
+            // 检查安全开关状态 - 如果机械臂已锁定，则忽略移动命令
+            if (isSafetyLocked() && 
+                (command.type == MOVE_SINGLE_SERVO || command.type == MOVE_ALL_SERVOS)) {
+                Serial.println("机械臂已锁定，无法执行移动命令");
+                continue; // 跳过此命令的处理
+            }
+            
             // 处理收到的命令
             switch (command.type) {
                 case MOVE_SINGLE_SERVO:                  
@@ -272,6 +282,11 @@ void inputProcessingTask(void *pvParameters) {
 
 // 处理PS2控制器输入 - 使用RobotArmController处理逻辑
 void processPS2Input() {
+    // 检查安全锁定状态 - 如果机械臂已锁定，不处理移动输入
+    if (isSafetyLocked()) {
+        return; // 机械臂已锁定，直接返回不处理输入
+    }
+    
     // 使用RobotArmController处理PS2输入并生成舵机命令
     ServoCommandType type = MOVE_SINGLE_SERVO; // 设置默认值避免未初始化
     uint8_t servoCount = 0;

@@ -65,6 +65,12 @@ public:
     // 移动舵机组
     void moveServos();
 
+    // 检查舵机是否正在移动
+    bool isServoMoving(uint8_t servoID);
+    
+    // 检查所有舵机是否都停止移动
+    bool allServosIdle();
+    
     // 运动学模式相关方法
     // 切换控制模式
     void setControlMode(ArmControlMode mode);
