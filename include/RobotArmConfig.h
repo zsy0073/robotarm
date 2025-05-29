@@ -121,6 +121,21 @@
 #define PS2_SEL_PIN         10    // PS2手柄选择引脚
 #define PS2_CLK_PIN         9    // PS2手柄时钟引脚
 
+// LED指示灯配置
+#define BASE_SERVO_LED_PIN      42    // 底座舵机指示LED引脚
+#define SHOULDER_SERVO_LED_PIN  41    // 肩部俯仰舵机指示LED引脚
+#define SHOULDER_ROLL_LED_PIN   40    // 肩部横滚舵机指示LED引脚
+#define ELBOW_SERVO_LED_PIN     39    // 肘部舵机指示LED引脚
+#define WRIST_PITCH_LED_PIN     38    // 腕部俯仰舵机指示LED引脚
+#define WRIST_ROLL_LED_PIN      4    // 腕部横滚舵机指示LED引脚
+#define WRIST_YAW_LED_PIN       5    // 腕部偏航舵机指示LED引脚
+#define GRIPPER_LED_PIN         6    // 夹爪舵机指示LED引脚
+
+// 蜂鸣器配置
+#define BUZZER_PIN              7    // 无源蜂鸣器引脚
+#define BUZZER_INIT_FREQ        1000 // 初始化提示音频率(Hz)
+#define BUZZER_INIT_DURATION    200  // 初始化提示音持续时间(ms)
+
 // 串口通信参数
 #define SERIAL_BAUDRATE     115200
 

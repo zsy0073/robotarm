@@ -36,13 +36,41 @@ bool initRobotArmTasks() {
     servoCommandQueue = xQueueCreate(10, sizeof(ServoCommand_t));
     if (servoCommandQueue == NULL) {
         return false;
-    }
-    
-    // 初始化舵机控制器
+    }    // 初始化舵机控制器
     servoController = LobotServoController(Serial2);
     // 使用指定的引脚配置Serial2
     Serial2.begin(9600, SERIAL_8N1, SERVO_SERIAL_RX, SERVO_SERIAL_TX);
     delay(500); // 等待舵机控制器初始化完成
+    
+    // 初始化蜂鸣器
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW); // 初始状态为关闭
+    
+    // 系统初始化提示音序列
+    // 两声短哔 - 表示系统初始化开始
+    tone(BUZZER_PIN, BUZZER_INIT_FREQ, BUZZER_INIT_DURATION);
+    delay(BUZZER_INIT_DURATION + 100);
+    tone(BUZZER_PIN, BUZZER_INIT_FREQ, BUZZER_INIT_DURATION);
+    delay(BUZZER_INIT_DURATION + 300);
+    
+    // 初始化LED指示灯
+    pinMode(BASE_SERVO_LED_PIN, OUTPUT);
+    digitalWrite(BASE_SERVO_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(SHOULDER_SERVO_LED_PIN, OUTPUT);
+    digitalWrite(SHOULDER_SERVO_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(SHOULDER_ROLL_LED_PIN, OUTPUT);
+    digitalWrite(SHOULDER_ROLL_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(ELBOW_SERVO_LED_PIN, OUTPUT);
+    digitalWrite(ELBOW_SERVO_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(WRIST_PITCH_LED_PIN, OUTPUT);
+    digitalWrite(WRIST_PITCH_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(WRIST_ROLL_LED_PIN, OUTPUT);
+    digitalWrite(WRIST_ROLL_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(WRIST_YAW_LED_PIN, OUTPUT);
+    digitalWrite(WRIST_YAW_LED_PIN, LOW); // 初始状态为熄灭
+    pinMode(GRIPPER_LED_PIN, OUTPUT);
+    digitalWrite(GRIPPER_LED_PIN, LOW); // 初始状态为熄灭
+
     
     // 优先直接移动舵机到初始位置，确保立即执行
     LobotServo servos[8];
@@ -139,9 +167,17 @@ bool initRobotArmTasks() {
         &webServerTaskHandle,           // 任务句柄指针
         0                               // 在Core 0上运行
     );
-    
-    // 初始化温度传感器显示模块
+      // 初始化温度传感器显示模块
     initTempSensorDisplay();
+    
+    // 系统初始化完成提示音
+    // 三声递增音调 - 表示系统初始化完成并就绪
+    tone(BUZZER_PIN, 800, 150);
+    delay(200);
+    tone(BUZZER_PIN, 1000, 150);
+    delay(200);
+    tone(BUZZER_PIN, 1200, 150);
+    delay(200);
     
     return initSuccess;
 }
@@ -155,10 +191,44 @@ void servoControlTask(void *pvParameters) {
         if (xQueueReceive(servoCommandQueue, &command, portMAX_DELAY) == pdTRUE) {
             // 处理收到的命令
             switch (command.type) {
-                case MOVE_SINGLE_SERVO:                  
+                case MOVE_SINGLE_SERVO:
+                {
                     servoController.moveServo(command.servoID, command.position, command.time);
                     // 更新RobotArmController中的位置
-                    armController.setServoPosition(command.servoID, command.position);
+                    armController.setServoPosition(command.servoID, command.position);                    // LED指示灯控制
+                    if (command.servoID == BASE_SERVO_ID) {
+                        digitalWrite(BASE_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(BASE_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == SHOULDER_PITCH_ID) {
+                        digitalWrite(SHOULDER_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(SHOULDER_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == SHOULDER_ROLL_ID) {
+                        digitalWrite(SHOULDER_ROLL_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(SHOULDER_ROLL_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == ELBOW_SERVO_ID) {
+                        digitalWrite(ELBOW_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(ELBOW_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == WRIST_PITCH_ID) {
+                        digitalWrite(WRIST_PITCH_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(WRIST_PITCH_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == WRIST_ROLL_ID) {
+                        digitalWrite(WRIST_ROLL_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(WRIST_ROLL_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == WRIST_YAW_ID) {
+                        digitalWrite(WRIST_YAW_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(WRIST_YAW_LED_PIN, LOW);  // 熄灭LED
+                    } else if (command.servoID == GRIPPER_SERVO_ID) {
+                        digitalWrite(GRIPPER_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                        digitalWrite(GRIPPER_LED_PIN, LOW);  // 熄灭LED
+                    }
                     
                     // 如果处于录制状态，记录该命令
                     if (servoRecorder.getState() == STATE_RECORDING) {
@@ -168,14 +238,91 @@ void servoControlTask(void *pvParameters) {
                         servoRecorder.recordCommand(MOVE_SINGLE_SERVO, 1, &servo, command.time);
                     }
                     break;
-                    
+                }
+                
                 case MOVE_ALL_SERVOS:
+                {
                     servoController.moveServos(command.servos, command.servoCount, command.time);
                     // 更新RobotArmController中的位置
                     for (int i = 0; i < command.servoCount; i++) {
                         if (command.servos[i].ID >= 1 && command.servos[i].ID <= SERVO_COUNT) {
                             armController.setServoPosition(command.servos[i].ID, command.servos[i].Position);
                         }
+                    }                    // LED指示灯控制 - 检查包含的舵机并点亮对应LED
+                    bool hasBaseServo = false;
+                    bool hasShoulderServo = false;
+                    bool hasShoulderRollServo = false;
+                    bool hasElbowServo = false;
+                    bool hasWristPitchServo = false;
+                    bool hasWristRollServo = false;
+                    bool hasWristYawServo = false;
+                    bool hasGripperServo = false;
+                    
+                    for (int i = 0; i < command.servoCount; i++) {
+                        if (command.servos[i].ID == BASE_SERVO_ID) {
+                            hasBaseServo = true;
+                        } else if (command.servos[i].ID == SHOULDER_PITCH_ID) {
+                            hasShoulderServo = true;
+                        } else if (command.servos[i].ID == SHOULDER_ROLL_ID) {
+                            hasShoulderRollServo = true;
+                        } else if (command.servos[i].ID == ELBOW_SERVO_ID) {
+                            hasElbowServo = true;
+                        } else if (command.servos[i].ID == WRIST_PITCH_ID) {
+                            hasWristPitchServo = true;
+                        } else if (command.servos[i].ID == WRIST_ROLL_ID) {
+                            hasWristRollServo = true;
+                        } else if (command.servos[i].ID == WRIST_YAW_ID) {
+                            hasWristYawServo = true;
+                        } else if (command.servos[i].ID == GRIPPER_SERVO_ID) {
+                            hasGripperServo = true;
+                        }
+                    }
+                    
+                    if (hasBaseServo) {
+                        digitalWrite(BASE_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(BASE_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasShoulderServo) {
+                        digitalWrite(SHOULDER_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(SHOULDER_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasShoulderRollServo) {
+                        digitalWrite(SHOULDER_ROLL_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(SHOULDER_ROLL_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasElbowServo) {
+                        digitalWrite(ELBOW_SERVO_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(ELBOW_SERVO_LED_PIN, LOW);  // 熄灭LED
+                    }
+                      if (hasWristPitchServo) {
+                        digitalWrite(WRIST_PITCH_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(WRIST_PITCH_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasWristRollServo) {
+                        digitalWrite(WRIST_ROLL_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(WRIST_ROLL_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasWristYawServo) {
+                        digitalWrite(WRIST_YAW_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(WRIST_YAW_LED_PIN, LOW);  // 熄灭LED
+                    }
+                    
+                    if (hasGripperServo) {
+                        digitalWrite(GRIPPER_LED_PIN, HIGH); // 点亮LED
+                        vTaskDelay(pdMS_TO_TICKS(10)); // 保持10ms
+                        digitalWrite(GRIPPER_LED_PIN, LOW);  // 熄灭LED
                     }
                     
                     // 如果处于录制状态，记录该命令
@@ -183,10 +330,29 @@ void servoControlTask(void *pvParameters) {
                         servoRecorder.recordCommand(MOVE_ALL_SERVOS, command.servoCount, command.servos, command.time);
                     }
                     break;
-                    
+                }
+                
                 case MOVE_TO_HOME:
+                {
                     // 委托RobotArmController移动到初始位置
-                    armController.moveToInitialPosition();
+                    armController.moveToInitialPosition();                    // 复位命令包含所有舵机，点亮所有8个舵机的LED
+                    digitalWrite(BASE_SERVO_LED_PIN, HIGH); // 点亮底座LED
+                    digitalWrite(SHOULDER_SERVO_LED_PIN, HIGH); // 点亮肩部俯仰LED
+                    digitalWrite(SHOULDER_ROLL_LED_PIN, HIGH); // 点亮肩部横滚LED
+                    digitalWrite(ELBOW_SERVO_LED_PIN, HIGH); // 点亮肘部LED
+                    digitalWrite(WRIST_PITCH_LED_PIN, HIGH); // 点亮腕部俯仰LED
+                    digitalWrite(WRIST_ROLL_LED_PIN, HIGH); // 点亮腕部横滚LED
+                    digitalWrite(WRIST_YAW_LED_PIN, HIGH); // 点亮腕部偏航LED
+                    digitalWrite(GRIPPER_LED_PIN, HIGH); // 点亮夹爪LED
+                    vTaskDelay(pdMS_TO_TICKS(200)); // 保持200ms
+                    digitalWrite(BASE_SERVO_LED_PIN, LOW);  // 熄灭底座LED
+                    digitalWrite(SHOULDER_SERVO_LED_PIN, LOW);  // 熄灭肩部俯仰LED
+                    digitalWrite(SHOULDER_ROLL_LED_PIN, LOW);  // 熄灭肩部横滚LED
+                    digitalWrite(ELBOW_SERVO_LED_PIN, LOW);  // 熄灭肘部LED
+                    digitalWrite(WRIST_PITCH_LED_PIN, LOW);  // 熄灭腕部俯仰LED
+                    digitalWrite(WRIST_ROLL_LED_PIN, LOW);  // 熄灭腕部横滚LED
+                    digitalWrite(WRIST_YAW_LED_PIN, LOW);  // 熄灭腕部偏航LED
+                    digitalWrite(GRIPPER_LED_PIN, LOW);  // 熄灭夹爪LED
                     
                     // 如果处于录制状态，记录该命令
                     if (servoRecorder.getState() == STATE_RECORDING) {
@@ -220,25 +386,26 @@ void servoControlTask(void *pvParameters) {
                         servoRecorder.recordCommand(MOVE_ALL_SERVOS, SERVO_COUNT, servos, SLOW_MOVE_TIME);
                     }
                     break;
-                    
+                }
+                
                 case UNLOAD_SERVOS:
+                {
                     // 创建舵机ID数组
-                    {
-                        uint8_t servoIds[SERVO_COUNT];
-                        for (int i = 0; i < SERVO_COUNT; i++) {
-                            servoIds[i] = i + 1;
-                        }
-                        servoController.setServoUnload(SERVO_COUNT, servoIds[0], servoIds[1], servoIds[2], 
-                                                     servoIds[3], servoIds[4], servoIds[5], servoIds[6], 
-                                                     servoIds[7]);
-                        
-                        // 如果处于录制状态，记录舵机掉电命令
-                        if (servoRecorder.getState() == STATE_RECORDING) {
-                            // 舵机掉电不需要具体舵机数据
-                            servoRecorder.recordCommand(UNLOAD_SERVOS, 0, NULL, 0);
-                        }
+                    uint8_t servoIds[SERVO_COUNT];
+                    for (int i = 0; i < SERVO_COUNT; i++) {
+                        servoIds[i] = i + 1;
+                    }
+                    servoController.setServoUnload(SERVO_COUNT, servoIds[0], servoIds[1], servoIds[2], 
+                                                 servoIds[3], servoIds[4], servoIds[5], servoIds[6], 
+                                                 servoIds[7]);
+                    
+                    // 如果处于录制状态，记录舵机掉电命令
+                    if (servoRecorder.getState() == STATE_RECORDING) {
+                        // 舵机掉电不需要具体舵机数据
+                        servoRecorder.recordCommand(UNLOAD_SERVOS, 0, NULL, 0);
                     }
                     break;
+                }
             }
         }
         
@@ -505,6 +672,12 @@ bool startPlayback(const char* fileName) {
         Serial.print("开始回放舵机动作，文件：");
         Serial.println(fileName);
         
+        // 播放开始提示音 - 两声短哔表示开始播放
+        tone(BUZZER_PIN, 1200, 100);
+        delay(150);
+        tone(BUZZER_PIN, 1200, 100);
+        delay(100);
+        
         // 创建一个回放任务
         xTaskCreatePinnedToCore(
             playbackTask,                // 任务函数
@@ -530,6 +703,12 @@ void stopPlayback() {
     // 停止回放
     servoRecorder.stopPlayback();
     Serial.println("停止回放");
+    
+    // 手动停止提示音 - 两声快速低音表示手动停止
+    tone(BUZZER_PIN, 600, 80);
+    delay(100);
+    tone(BUZZER_PIN, 600, 80);
+    delay(100);
     
     // 如果回放任务存在，停止它
     if (playbackTaskHandle != NULL) {
@@ -577,10 +756,17 @@ void playbackTask(void* pvParameters) {
         }
         
         // 短暂让出CPU
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
+        vTaskDelay(pdMS_TO_TICKS(5));    }
     
     Serial.println("舵机命令回放任务结束");
+    
+    // 播放完成提示音 - 三声递降音调表示播放完成
+    tone(BUZZER_PIN, 1200, 100);
+    delay(120);
+    tone(BUZZER_PIN, 1000, 100);
+    delay(120);
+    tone(BUZZER_PIN, 800, 150);
+    delay(200);
     
     // 删除自身
     playbackTaskHandle = NULL;
