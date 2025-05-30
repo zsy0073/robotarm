@@ -57,12 +57,11 @@ void tempDisplayTask(void *pvParameters) {
     display->setTextColor(SSD1306_WHITE);   // 设置文字颜色
     display->clearDisplay();                // 清除显示缓存
     
-    // 显示启动信息
-    display->setCursor(0, 0);
+    // 显示启动信息    display->setCursor(0, 0);
     display->println("ROBOT ARM TEMP MONITOR");
     display->println("Initializing...");
     display->display();
-    delay(2000);
+    vTaskDelay(pdMS_TO_TICKS(2000));
     
     for (;;) {
         // 读取温度数据

@@ -37,21 +37,20 @@ bool initRobotArmTasks() {
     if (servoCommandQueue == NULL) {
         return false;
     }    // 初始化舵机控制器
-    servoController = LobotServoController(Serial2);
-    // 使用指定的引脚配置Serial2
+    servoController = LobotServoController(Serial2);    // 使用指定的引脚配置Serial2
     Serial2.begin(9600, SERIAL_8N1, SERVO_SERIAL_RX, SERVO_SERIAL_TX);
-    delay(500); // 等待舵机控制器初始化完成
-    
-    // 初始化蜂鸣器
+    vTaskDelay(pdMS_TO_TICKS(500)); // 等待舵机控制器初始化完成
+      // 初始化蜂鸣器
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW); // 初始状态为关闭
     
     // 系统初始化提示音序列
     // 两声短哔 - 表示系统初始化开始
     tone(BUZZER_PIN, BUZZER_INIT_FREQ, BUZZER_INIT_DURATION);
-    delay(BUZZER_INIT_DURATION + 100);
+    // 使用vTaskDelay代替delay
+    vTaskDelay(pdMS_TO_TICKS(BUZZER_INIT_DURATION + 100));
     tone(BUZZER_PIN, BUZZER_INIT_FREQ, BUZZER_INIT_DURATION);
-    delay(BUZZER_INIT_DURATION + 300);
+    vTaskDelay(pdMS_TO_TICKS(BUZZER_INIT_DURATION + 300));
     
     // 初始化LED指示灯
     pinMode(BASE_SERVO_LED_PIN, OUTPUT);
@@ -169,15 +168,14 @@ bool initRobotArmTasks() {
     );
       // 初始化温度传感器显示模块
     initTempSensorDisplay();
-    
-    // 系统初始化完成提示音
+      // 系统初始化完成提示音
     // 三声递增音调 - 表示系统初始化完成并就绪
     tone(BUZZER_PIN, 800, 150);
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
     tone(BUZZER_PIN, 1000, 150);
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
     tone(BUZZER_PIN, 1200, 150);
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
     
     return initSuccess;
 }
@@ -544,9 +542,8 @@ void processPS2Input() {
     // 添加安全检查 - 确保ESP32不会崩溃
     static unsigned long lastWatchdogReset = 0;
     unsigned long currentTime = millis();
-    if (currentTime - lastWatchdogReset > 500) {
-        // 每500ms执行一次看门狗喂食
-        delay(1); // 短暂放弃CPU控制权，让其他任务运行
+    if (currentTime - lastWatchdogReset > 500) {        // 每500ms执行一次看门狗喂食
+        vTaskDelay(pdMS_TO_TICKS(1)); // 短暂放弃CPU控制权，让其他任务运行
         lastWatchdogReset = currentTime;
     }
 }
@@ -671,12 +668,11 @@ bool startPlayback(const char* fileName) {
     if (success) {
         Serial.print("开始回放舵机动作，文件：");
         Serial.println(fileName);
-        
-        // 播放开始提示音 - 两声短哔表示开始播放
+          // 播放开始提示音 - 两声短哔表示开始播放
         tone(BUZZER_PIN, 1200, 100);
-        delay(150);
+        vTaskDelay(pdMS_TO_TICKS(150));
         tone(BUZZER_PIN, 1200, 100);
-        delay(100);
+        vTaskDelay(pdMS_TO_TICKS(100));
         
         // 创建一个回放任务
         xTaskCreatePinnedToCore(
@@ -703,12 +699,11 @@ void stopPlayback() {
     // 停止回放
     servoRecorder.stopPlayback();
     Serial.println("停止回放");
-    
-    // 手动停止提示音 - 两声快速低音表示手动停止
+      // 手动停止提示音 - 两声快速低音表示手动停止
     tone(BUZZER_PIN, 600, 80);
-    delay(100);
+    vTaskDelay(pdMS_TO_TICKS(100));
     tone(BUZZER_PIN, 600, 80);
-    delay(100);
+    vTaskDelay(pdMS_TO_TICKS(100));
     
     // 如果回放任务存在，停止它
     if (playbackTaskHandle != NULL) {
@@ -759,14 +754,13 @@ void playbackTask(void* pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(5));    }
     
     Serial.println("舵机命令回放任务结束");
-    
-    // 播放完成提示音 - 三声递降音调表示播放完成
+      // 播放完成提示音 - 三声递降音调表示播放完成
     tone(BUZZER_PIN, 1200, 100);
-    delay(120);
+    vTaskDelay(pdMS_TO_TICKS(120));
     tone(BUZZER_PIN, 1000, 100);
-    delay(120);
+    vTaskDelay(pdMS_TO_TICKS(120));
     tone(BUZZER_PIN, 800, 150);
-    delay(200);
+    vTaskDelay(pdMS_TO_TICKS(200));
     
     // 删除自身
     playbackTaskHandle = NULL;
